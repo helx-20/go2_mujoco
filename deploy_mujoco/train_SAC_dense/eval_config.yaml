@@ -1,0 +1,22 @@
+#policy: "random"  # random表示随机策略，其余情况下则查找训练好的模型
+policy: "sac_dense_0311-ratio70"  # random表示随机策略，其余情况下则查找训练好的模型
+checkpoint: "checkpoint_step_25000"
+
+go2_task: "terrain"
+go2_config: "go2.yaml"
+terrain_config: "terrain_config.yaml"
+
+episodes: 200
+max_episode_steps: 350
+seed: 21000
+
+#log_name: "random_eval_0310_18"
+#log_name: "random_eval_debug"
+log_name: "dense_sac_eval_0312"
+
+use_curr_force: False  # 强制使用当前配置
+
+render: False
+save_non_failure_trajectories: false
+
+# nohup python deploy_mujoco/train_SAC_dense/eval.py >nohup_sac_dense_eval.out 2>&1 &

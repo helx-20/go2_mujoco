@@ -1,0 +1,39 @@
+# pkl files or directories containing pkl files
+pkl_paths:
+  - "../train_SAC/eval_logs/random_eval_0327_20260328_001124"
+  - "../train_SAC/eval_logs/random_eval_0327_20260328_001128"
+  - "../train_SAC/eval_logs/random_eval_0327_20260328_001145"
+
+# replay mode (terrain action is always applied from pkl):
+# - terrain_action: robot is advanced by TerrainTrainer.step(...)
+# - robot_action: robot is replayed by low-level tau from info.go2_rollout_trace.actions
+# - robot_state: robot is replayed by qpos/qvel from info.go2_rollout_trace.states
+replay_mode: "robot_state"
+
+# Terrain replay policy:
+# - realtime: apply terrain action at every transition during replay
+# - preset: precompute terrain from current pkl actions once,
+#           then keep terrain fixed while replaying robot;
+#           when switching to another pkl, it is recomputed again.
+terrain_replay:
+  mode: "realtime"    # realtime | preset
+
+# Which controller stack to use when creating TerrainTrainer.
+# Should match the source data generation task.
+go2_task: "terrain" # terrain | velocity
+
+# Viewer/runtime
+render: true
+realtime_sim: false
+
+# Optional limits (<=0 means no limit)
+max_files: 0
+max_episodes_per_file: 0
+max_steps_per_episode: 0
+
+# robot_action/robot_state mode: fallback to terrain_action when trace missing
+fallback_to_terrain_action: true
+
+# trace playback: no sleep by default, keep as fast as possible
+trace_sleep_dt: 0.0
+

@@ -1,0 +1,52 @@
+# Transition PCA + clustering config
+
+# Input pkl files or directories (same format as replay/train logs)
+pkl_paths:
+  - "../train_SAC/eval_logs/random_eval_0327_20260328_001124"
+  - "../train_SAC/eval_logs/random_eval_0327_20260328_001128"
+  - "../train_SAC/eval_logs/random_eval_0327_20260328_001145"
+
+# Output directory
+output_dir: "debug"
+
+# Clustering method: kmeans | dbscan | both
+method: "both"
+
+# If true, cluster on PCA embeddings; else cluster on preprocessed full features
+cluster_on_pca: true
+
+# Load limits (<=0 means no limit)
+max_files: 0
+max_chains_per_file: 0
+max_transitions_per_chain: 0
+
+# Feature composition for each transition
+features:
+  use_obs: true
+  use_action: true
+  use_next_obs: false
+  use_reward: true
+  use_done: true
+  use_failure_flags: true
+
+pca:
+  # int or float (variance ratio, e.g. 0.95)
+  n_components: 2
+  standardize: true
+  whiten: false
+  random_state: 0
+
+kmeans:
+  n_clusters: 6
+  random_state: 0
+  n_init: 10
+  max_iter: 300
+
+dbscan:
+  eps: 0.8
+  min_samples: 10
+  metric: "euclidean"
+
+# Used by --demo mode
+demo_n_per_cluster: 120
+

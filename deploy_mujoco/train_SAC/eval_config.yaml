@@ -1,0 +1,45 @@
+#policy: "sac_0312-rew1-preload"  # random表示随机策略，其余情况下则查找训练好的模型
+#checkpoint: "checkpoint_step_40000"
+
+#policy: "gogogo0316_preload"
+#checkpoint: "checkpoint_step_15000"
+
+policy: "random"
+checkpoint: ""
+
+#policy: "sac_0310-rew2"  # random表示随机策略，其余情况下则查找训练好的模型
+#checkpoint: "checkpoint_step_22000"
+
+go2_task: "terrain"
+go2_config: "go2.yaml"
+terrain_config: "terrain_config.yaml"
+#go2_task: "terrain_g1"
+#go2_config: "g1.yaml"
+#terrain_config: "terrain_config_g1.yaml"
+
+episodes: 4000
+max_episode_steps: 35
+seed: 101018564167891021
+
+#log_name: "nohup_random_eval_go2-2_15cm_4"
+#log_name: "random_eval_0317-7"
+#log_name: "debug"
+#log_name: "sac_eval_gogogo0316_preload"
+#log_name: "debug"
+log_name: "random_eval_0401-0329"
+
+use_curr_force: False  # 强制使用当前配置
+
+render: false
+save_non_failure_trajectories: false
+
+sampling:
+  # Probability of sampling action from uniform distribution.
+  # 0.0 = pure SAC sampling, 1.0 = pure uniform sampling.
+  uniform_weight: 0.30
+
+#nohup python deploy_mujoco/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_21000.out 2>&1 &
+#nohup python deploy_mujoco/train_SAC/eval.py >nohup_policy_eval_sac_0310_rew2_22000.out 2>&1 &
+
+# nohup python deploy_mujoco/train_SAC/eval.py >nohup_random_eval-3.out 2>&1 &
+# nohup python deploy_mujoco/train_SAC/eval.py >nohup_sac_eval_1.out 2>&1 &

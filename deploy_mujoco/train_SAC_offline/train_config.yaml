@@ -1,0 +1,103 @@
+go2_task: "terrain"
+go2_config: "go2.yaml"
+terrain_config: "terrain_config.yaml"
+
+# Offline-only training budget (number of optimization updates)
+total_updates: 3000
+gradient_steps_per_update: 1
+max_episode_steps: 35
+
+# Device / Torch runtime
+device: "cuda:0"
+seed: 0
+torch_deterministic: false
+cudnn_benchmark: true
+allow_tf32: true
+torch_num_threads: 0
+
+# SAC hyperparameters
+learning_rate: 0.0003
+batch_size: 256
+buffer_size: 1000000
+tau: 0.005
+gamma: 0.99
+
+# Optional warm-start
+preload_model_path: ""
+
+# Offline data paths (dirs or .pkl files)
+offline_pkl_paths:
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_001124"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_001128"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_001145"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_001150"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_001156"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_001651"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_001657"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_001701"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_143421"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_143429"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_143435"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_143443"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_143450"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_173144"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_173157"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_173207"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_173215"
+#  - "../train_SAC/eval_logs/random_eval_0327_20260328_173234"
+
+  - "../train_SAC/eval_logs/random_eval_0329_20260329_161840"
+  - "../train_SAC/eval_logs/random_eval_0329_20260329_161851"
+  - "../train_SAC/eval_logs/random_eval_0329_20260329_161855"
+  - "../train_SAC/eval_logs/random_eval_0329_20260329_161903"
+  - "../train_SAC/eval_logs/random_eval_0329_20260329_161909"
+  - "../train_SAC/eval_logs/random_eval_0329_20260329_162003"
+  - "../train_SAC/eval_logs/random_eval_0329_20260329_162012"
+  - "../train_SAC/eval_logs/random_eval_0329_20260329_162021"
+  - "../train_SAC/eval_logs/random_eval_0329_20260329_162028"
+  - "../train_SAC/eval_logs/random_eval_0329_20260329_162039"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_150824"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_150841"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_150851"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_150901"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_151247"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_151253"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_151303"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_151308"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_151824"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_151837"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_195137"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_195145"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_195153"
+  - "../train_SAC/eval_logs/random_eval_0401-0329_20260401_195203"
+#
+#  - "../train_SAC/eval_logs/random_eval_0311-1"
+#  - "../train_SAC/eval_logs/random_eval_0311-2"
+#  - "../train_SAC/eval_logs/random_eval_0311-3"
+#  - "../train_SAC/eval_logs/random_eval_0311-4"
+#  - "../train_SAC/eval_logs/random_eval_0311-5"
+#  - "../train_SAC/eval_logs/random_eval_0311-6"
+#  - "../train_SAC/eval_logs/random_eval_0311-7"
+#  - "../train_SAC/eval_logs/random_eval_0311-8"
+
+# Keep first K frames in each consecutive fail+stuck run (0 = no trim)
+consecutive_fail_keep_k: 1
+
+# If true, reward is recomputed from transition info + terrain_config reward fields
+reward_recompute: true
+
+# Logging / checkpoints
+log_every_updates: 100
+checkpoint_every_updates: 100
+
+# Periodic simulation evaluation during offline updates
+eval_enabled: true
+eval_every_updates: 20
+eval_episodes: 5
+eval_max_episode_steps: 35
+eval_deterministic: false
+eval_render: false
+
+log_name: "sac_offline_0329_eval"
+
+# nohup python deploy_mujoco/train_SAC_offline/train.py >nohup_hhh0324_sac_offline.out 2>&1 &

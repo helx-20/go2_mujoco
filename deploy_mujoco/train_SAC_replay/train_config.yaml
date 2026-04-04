@@ -1,0 +1,60 @@
+go2_task: "terrain"
+go2_config: "go2.yaml"
+terrain_config: "terrain_config.yaml"
+
+# Training budget
+total_timesteps: 80000
+
+# Device / torch runtime
+device: "cuda:0"
+seed: 0
+torch_deterministic: false
+cudnn_benchmark: true
+allow_tf32: true
+torch_num_threads: 0
+
+# Replay dataset paths (dirs or .pkl files)
+replay_pkl_paths:
+  - "../train_SAC/eval_logs/random_eval_0317-1"
+  - "../train_SAC/eval_logs/random_eval_0317-2"
+  - "../train_SAC/eval_logs/random_eval_0317-3"
+  - "../train_SAC/eval_logs/random_eval_0317-4"
+
+# Keep only first K transitions in each consecutive fail+stuck run (0 = no trim)
+consecutive_fail_keep_k: 1
+replay_random_chain: true
+
+# SAC hyperparameters
+learning_rate: 0.0003
+gamma: 0.99
+tau: 0.005
+batch_size: 256
+buffer_size: 1000000
+learning_starts: 100
+train_freq: 1
+gradient_steps: 1
+use_automatic_entropy_tuning: true
+target_entropy: 0.0
+reward_scale: 1.0
+
+# Network architecture
+policy_arch: "256-256"
+qf_arch: "256-256"
+orthogonal_init: false
+policy_log_std_multiplier: 1.0
+policy_log_std_offset: -1.0
+
+# Logging / checkpoints
+log_every_steps: 200
+checkpoint_every_steps: 2000
+log_name: "sac_replay-0319-noeval"
+
+# Evaluation on full simulation rollouts (separate from replay collection)
+eval_enabled: false
+eval_every_updates: 10
+eval_episodes: 5
+eval_max_episode_steps: 200
+eval_deterministic: false
+
+#nohup python deploy_mujoco/train_SAC_replay/train.py >nohup_sac_replay-0319-noeval.out 2>&1 &
+

@@ -1,0 +1,82 @@
+go2_task: "terrain"
+go2_config: "go2.yaml"
+terrain_config: "terrain_config.yaml"
+
+total_timesteps: 80000
+max_episode_steps: 35
+
+# Device / Torch runtime
+# auto | cpu | cuda | cuda:0
+device: "cuda:2"
+seed: 0
+torch_deterministic: false
+cudnn_benchmark: true
+allow_tf32: true
+torch_num_threads: 0
+
+# SAC-dense hyperparameters
+learning_rate: 0.0003
+batch_size: 256
+buffer_size: 1000000
+train_freq: 1
+gradient_steps: 1
+tau: 0.005
+gamma: 0.99
+
+# Dense replay filter threshold
+reward_threshold: 8.0
+
+# Non-finite obs clamp to avoid NaN propagation into actor
+obs_abs_clip: 1000.0
+
+# Plotting
+# Save partial curves every N timesteps.
+plot_save_every_steps: 2000
+# Moving average window for reward smoothing.
+plot_smooth_window: 20
+
+# Checkpoint
+# Save model checkpoint every N timesteps.
+checkpoint_every_steps: 200
+
+# Optional warm-starts
+preload_model_path: ""
+preload_pkl_paths: [
+  "../train_SAC/eval_logs/random_eval_0327_20260328_001124",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_001128",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_001145",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_001150",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_001156",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_001651",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_001657",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_001701",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_143421",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_143429",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_143435",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_143443",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_143450",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_173144",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_173157",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_173207",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_173215",
+  "../train_SAC/eval_logs/random_eval_0327_20260328_173234",
+]
+
+learning_starts: 100
+
+# Offline data loading filter for replay preload:
+# keep only first K frames in each consecutive fail+stuck run, then wait until non-stuck/fail appears.
+# 0 means do not trim.
+consecutive_fail_keep_k: 1
+
+dense_sample_ratio: 0.7
+
+# Train-time failure recording
+failure_pkl_name: "collision_failures.pkl"
+failure_flush_every_episodes: 50
+
+#log_name: "sac_dense_0312-preload-ratio70"
+log_name: "sac_dense_ratio100_0328_preload"
+
+#nohup python deploy_mujoco/train_SAC_dense/train.py >nohup_hhh0324_sac_dense_preload-ratio100.out 2>&1 &
+#nohup python deploy_mujoco/train_SAC_dense/train.py >debug.out 2>&1 &
