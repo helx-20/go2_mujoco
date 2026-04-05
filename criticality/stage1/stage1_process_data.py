@@ -19,7 +19,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from criticality.utils.data_utils import collect_nde_files, load_criticality_records, flatten_episode_records
+from criticality.utils.data_utils import collect_nde_files, load_criticality_records
 
 
 def main(args):
@@ -117,7 +117,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--nde_folder', default='data/nde', help='folder where nde_*.npy are stored')
-    parser.add_argument('--out', default='data/stage1', help='output folder for processed arrays')
+    parser.add_argument('--nde_folder', default='/mnt/mnt1/linxuan/go2_data/data/nde', help='folder where nde_*.npy are stored')
+    parser.add_argument('--out', default='/mnt/mnt1/linxuan/go2_data/data/stage1', help='output folder for processed arrays')
     args = parser.parse_args()
     main(args)
