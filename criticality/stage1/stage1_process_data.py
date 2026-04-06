@@ -21,34 +21,53 @@ if PROJECT_ROOT not in sys.path:
 
 from criticality.utils.data_utils import collect_nde_files, load_criticality_records
 
+def refine_truncated_episodes(ep_obs, ep_actions):
+    end_step = 40
+    for i in range(len(ep_obs)-1, 0, -1):
+        if np.linalg.norm(ep_obs[i][:2]) > 0.05:
+            end_step = i
+            break
+    return ep_obs[:end_step+1], ep_actions[:end_step+1]
 
 def main(args):
-    src = args.nde_folder
+    srcs = args.nde_folders
     out = args.out
     os.makedirs(out, exist_ok=True)
 
-    files = collect_nde_files(src)
+    files = []
+    for src in srcs:
+        files.extend(collect_nde_files(src))
     obs_list = []
     label_list = []
 
-    for f in tqdm.tqdm(files):
+    crash_type_counts = {}
+
+    for f in files:
         recs = load_criticality_records(f)
         for ep in recs:
             ep_obs = ep.get('obs', [])
             ep_actions = ep.get('actions', None)
             ep_label = int(ep.get('label', 0))
+            if ep_label == 1 and len(ep_obs) == 40:
+                ep_obs, ep_actions = refine_truncated_episodes(ep_obs, ep_actions)
+            if ep_label == 1:
+                crash_type = ep.get('crash_type', 'unknown')
+                crash_type_counts[crash_type] = crash_type_counts.get(crash_type, 0) + 1
+                print('Crash type counts:')
+                for crash_type, count in crash_type_counts.items():
+                    print(f'  {crash_type}: {count}')
             L = len(ep_obs)
             if L == 0:
                 continue
-            # For crash episodes: only mark last 3 steps as positive, others negative
+            # For crash episodes: only mark last 4 steps as positive, others negative
             if ep_label == 1:
-                pos_idx = set(range(max(0, L-3), L))
+                pos_idx = set(range(max(0, L-4), L))
             else:
                 pos_idx = set()
 
             for t, o in enumerate(ep_obs):
                 if t not in pos_idx:
-                    if np.random.rand() > 0.02:  # subsample negative steps to reduce class imbalance
+                    if np.random.rand() > 0.01:  # subsample negative steps to reduce class imbalance
                         continue
 
                 o_arr = np.asarray(o, dtype=np.float32)
@@ -109,15 +128,16 @@ def main(args):
     split_and_save(neg, 'neg', feature_dim)
 
     # also save combined pos.npy/neg.npy for backward compatibility
-    np.save(os.path.join(out, 'pos.npy'), pos, allow_pickle=False)
-    np.save(os.path.join(out, 'neg.npy'), neg, allow_pickle=False)
+    # np.save(os.path.join(out, 'pos.npy'), pos, allow_pickle=False)
+    # np.save(os.path.join(out, 'neg.npy'), neg, allow_pickle=False)
 
     print('Saved processed data in', out)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--nde_folder', default='/mnt/mnt1/linxuan/go2_data/data/nde', help='folder where nde_*.npy are stored')
+    folders = ['/mnt/mnt1/linxuan/go2_data/data/nde1', '/mnt/mnt1/linxuan/go2_data/data/nde2']
+    parser.add_argument('--nde_folders', default=folders, help='folders where nde_*.npy are stored')
     parser.add_argument('--out', default='/mnt/mnt1/linxuan/go2_data/data/stage1', help='output folder for processed arrays')
     args = parser.parse_args()
     main(args)
