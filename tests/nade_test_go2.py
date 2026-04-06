@@ -162,7 +162,7 @@ def run(args):
             done = bool(terminated) or bool(truncated)
 
         # episode finished; determine crash/failure from last step's info
-        crash = int(bool(info.get('fallen', False) or info.get('base_collision', False) or info.get('stuck', False)))
+        crash = int(bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False)))
         weighted_failures.append(crash * total_weight)
         print(f"episode {i+1}/{n} steps={steps} crash={crash>0} weight={total_weight:.6f}")
 
@@ -188,12 +188,12 @@ if __name__ == '__main__':
     parser.add_argument('--episodes', type=int, default=500)
     parser.add_argument('--max_steps', type=int, default=40)
     parser.add_argument('--log_interval', type=int, default=10)
-    parser.add_argument('--model_path', type=str, default='criticality/stage1/model/stage1_criticality_best_1.pt', help='Optional criticality model')
+    parser.add_argument('--model_path', type=str, default='criticality/stage2/model/stage2_2_epoch300.pt', help='Optional criticality model')
     parser.add_argument('--candidates', type=int, default=16, help='Number of candidate terrain actions to sample per decision if not discretizing full grid')
     parser.add_argument('--out', type=str, default='results/nade/', help='Path to save weighted failures numpy array')
     parser.add_argument('--save_interval', type=int, default=10, help='Save results every N episodes at log interval')
-    parser.add_argument('--epsilon', type=float, default=0.5, help='epsilon mixing weight for criticality/pdf')
-    parser.add_argument('--criticality_thresh', type=float, default=0.05, help='threshold to binarize criticality scores')
+    parser.add_argument('--epsilon', type=float, default=0.01, help='epsilon mixing weight for criticality/pdf')
+    parser.add_argument('--criticality_thresh', type=float, default=0.1, help='threshold to binarize criticality scores')
     parser.add_argument('--min_weight', type=float, default=1e-6, help='minimum weight to apply to failures')
     args = parser.parse_args()
     print('args:', args)

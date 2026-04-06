@@ -34,9 +34,8 @@ def main(args):
     q_net.eval()
 
     # load replay buffer
-    replay_buffer = ReplayBuffer(args.pos_path, args.neg_path, pos_ratio=0.5)
+    replay_buffer = ReplayBuffer(args.pos_path, args.neg_path, pos_ratio=args.pos_ratio)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     agent = DQN(q_net, learning_rate=args.lr, gamma=args.gamma, target_update=args.target_update, device=device)
 
     data_dir = args.test_dir
@@ -56,6 +55,7 @@ def main(args):
         inputs, next_obs, rewards, dones = replay_buffer.sample(args.batch_size)
         agent.update(inputs, next_obs, rewards, dones)
         if epoch % args.validate_interval == 0:
+            print(f'Epoch {epoch}/{args.epochs} - validating on test set...')
             test_auc = test_model(test_loader, agent.q_net, device)
             if test_auc > best_auc:
                 best_auc = test_auc
@@ -91,7 +91,7 @@ def test_model(test_loader, model, device):
     test_recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     prec, rec, thr = precision_recall_curve(y_true_test, y_score_test)
     test_auc = auc(rec, prec)
-    print(f'Test acc on {total} samples = {test_acc:.4f} p={test_precision:.4f} r={test_recall:.4f} auc={test_auc:.4f}')
+    print(f'Test acc = {test_acc:.4f} p={test_precision:.4f} r={test_recall:.4f} auc={test_auc:.4f}')
     return test_auc
 
 if __name__ == '__main__':
@@ -102,11 +102,12 @@ if __name__ == '__main__':
     parser.add_argument('--pos_path', default='/mnt/mnt1/linxuan/go2_data/data/stage2/replay_buffer_pos.npy')
     parser.add_argument('--neg_path', default='/mnt/mnt1/linxuan/go2_data/data/stage2/replay_buffer_neg.npy')
     parser.add_argument('--test_dir', default='/mnt/mnt1/linxuan/go2_data/data/stage1')
-    parser.add_argument('--device', default='cpu')
+    parser.add_argument('--device', default='cuda:0')
+    parser.add_argument('--pos_ratio', default=0.2, type=float, help='ratio of positive samples in each training batch')
     parser.add_argument('--epochs', default=1000, type=int)
-    parser.add_argument('--batch_size', default=512, type=int)
+    parser.add_argument('--batch_size', default=1024, type=int)
     parser.add_argument('--lr', default=1e-3, type=float)
-    parser.add_argument('--gamma', default=0.99, type=float)
+    parser.add_argument('--gamma', default=0.9, type=float)
     parser.add_argument('--target_update', default=50, type=int)
     parser.add_argument('--validate_interval', default=50, type=int)
     args = parser.parse_args()

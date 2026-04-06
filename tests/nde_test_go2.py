@@ -115,14 +115,15 @@ def run(args):
             done = bool(terminated) or bool(truncated)
 
         # episode finished; determine crash/failure from last step's info
-        crash = int(bool(info.get('fallen', False) or info.get('base_collision', False) or info.get('stuck', False)))
+        crash = int(bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False)))
         crashes.append(crash)
+        crash_type = 'fallen' if info.get('fallen', False) else 'collided' if info.get('collided', False) else 'base_collision' if info.get('base_collision', False) else 'thigh_collision' if info.get('thigh_collision', False) else 'stuck' if info.get('stuck', False) else 'none'
         print(f"episode {i+1}/{n} steps={steps} crash={crash}")
 
         # label and append per-episode data to global criticality buffers
         if crit_out is not None:
             label = int(crash)
-            crit_data_all.append({'obs': ep_obs, 'actions': ep_actions, 'label': label})
+            crit_data_all.append({'obs': ep_obs, 'actions': ep_actions, 'label': label, 'crash_type': crash_type})
 
         if (i + 1) % args.log_interval == 0:
             Mean, RHF, Val = calculate_val(crashes)

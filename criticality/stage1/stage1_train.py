@@ -214,7 +214,9 @@ def test(args):
             plt.ylabel('Precision')
             plt.title(f'Precision-Recall (AUC={test_auc:.4f})')
             plt.grid(True)
-            point_num = 20
+            plt.xlim(0, 1)
+            plt.ylim(0, 1)
+            point_num = 10
             gap_num = len(thr) // point_num
             points = [(rec[gap_num * i], prec[gap_num * i], thr[gap_num * i]) for i in range(point_num)]
             for x, y, tval in points:

@@ -29,6 +29,7 @@ def analyze(path):
     crashes = []
     for file in os.listdir(path):
         data = np.load(os.path.join(path, file), allow_pickle=True).tolist()
+        print([data[i] for i in range(len(data)) if data[i] > 0])
         if max(data) > 2:
             print(max(data))
         else:
