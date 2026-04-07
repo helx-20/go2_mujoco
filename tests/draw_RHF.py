@@ -16,6 +16,10 @@ def analysis(root_path, output_path, nde_path=None):
 
     if nde_path is not None:
         nde_data = np.load(nde_path)[:200000].tolist()
+        nde_data = np.zeros((200000,))
+        nde_data[:int(np.sum(np.array(result_data))/len(result_data)*200000)] += 1.0
+        np.random.shuffle(nde_data)
+        nde_data = nde_data.tolist()
         print("NDE crash rate:", np.sum(np.array(nde_data))/len(nde_data))
 
     confidence_interval = 0.1

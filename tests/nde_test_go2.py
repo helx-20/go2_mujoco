@@ -112,7 +112,7 @@ def run(args):
 
             next_obs, reward, terminated, truncated, info = env.step(action)
             obs = next_obs
-            done = bool(terminated) or bool(truncated)
+            done = bool(terminated) or bool(truncated) or bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
 
         # episode finished; determine crash/failure from last step's info
         crash = int(bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False)))

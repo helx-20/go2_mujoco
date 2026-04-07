@@ -141,7 +141,7 @@ def train(args):
         if val_auc > best_auc:
             best_auc = val_auc
             os.makedirs(args.save_dir, exist_ok=True)
-            torch.save(model.state_dict(), os.path.join(args.save_dir, f'stage1_criticality_best_{args.model_idx}.pt'))
+            torch.save(model.state_dict(), os.path.join(args.save_dir, f'stage1_criticality_best_new_{args.model_idx}.pt'))
 
     print('Done. Best val auc:', best_auc)
 
@@ -166,7 +166,7 @@ def test(args):
     model = SimpleClassifier(input_dim=input_dim, hidden=args.hidden).to(device)
 
     # if we saved a best model, load it for test
-    best_model_path = os.path.join(args.save_dir, f'stage1_criticality_best_{args.model_idx}.pt')
+    best_model_path = os.path.join(args.save_dir, f'stage1_criticality_best_new_{args.model_idx}.pt')
     if os.path.exists(best_model_path):
         try:
             model.load_state_dict(torch.load(best_model_path, map_location=device))
@@ -216,12 +216,17 @@ def test(args):
             plt.grid(True)
             plt.xlim(0, 1)
             plt.ylim(0, 1)
-            point_num = 10
-            gap_num = len(thr) // point_num
-            points = [(rec[gap_num * i], prec[gap_num * i], thr[gap_num * i]) for i in range(point_num)]
+            point_num = 20
+            idx = []
+            for i in range(point_num):
+                for tmp in range(len(thr)):
+                    if rec[tmp] >= max(rec) - (max(rec) - min(rec)) * i / point_num:
+                        idx.append(tmp)
+                        break
+            points = [(rec[i], prec[i], thr[i]) for i in idx]
             for x, y, tval in points:
                 plt.scatter([x], [y], color='red', s=24)
-                plt.annotate(f'{tval:.2f}', xy=(x, y), xytext=(6, -10), textcoords='offset points', fontsize=8, color='red')
+                plt.annotate(f'{tval:.2f}', xy=(x, y), xytext=(0, -10), textcoords='offset points', fontsize=8, color='red')
             plt.tight_layout()
             plt.savefig(os.path.join(args.save_dir, 'precision_recall.png'), dpi=600)
             plt.close()

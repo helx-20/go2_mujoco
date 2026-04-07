@@ -62,6 +62,10 @@ def main(args):
             fp += int(((preds == 1) & (yb == 0)).sum().item())
             fn += int(((preds == 0) & (yb == 1)).sum().item())
             probs = torch.softmax(logits, dim=1)[:, 1]
+            # if max(yb) == 1:
+            #     print('pos score:', torch.mean(probs[torch.where(yb == 1)[0]]))
+            # if min(yb) == 0:
+            #     print('neg score:', torch.mean(probs[torch.where(yb == 0)[0]]))
             y_score_test.extend(probs.cpu().numpy().tolist())
             y_true_test.extend(yb.cpu().numpy().tolist())
     test_acc = correct / total if total > 0 else 0.0
@@ -82,19 +86,24 @@ def main(args):
         plt.grid(True)
         plt.xlim(0, 1)
         plt.ylim(0, 1)
-        point_num = 10
-        gap_num = len(thr) // point_num
-        points = [(rec[gap_num * i], prec[gap_num * i], thr[gap_num * i]) for i in range(point_num)]
+        point_num = 20
+        idx = []
+        for i in range(point_num):
+            for tmp in range(len(thr)):
+                if rec[tmp] >= max(rec) - (max(rec) - min(rec)) * i / point_num:
+                    idx.append(tmp)
+                    break
+        points = [(rec[i], prec[i], thr[i]) for i in idx]
         for x, y, tval in points:
             plt.scatter([x], [y], color='red', s=24)
-            plt.annotate(f'{tval:.2f}', xy=(x, y), xytext=(6, -10), textcoords='offset points', fontsize=8, color='red')
+            plt.annotate(f'{tval:.2f}', xy=(x, y), xytext=(0, -10), textcoords='offset points', fontsize=8, color='red')
         plt.tight_layout()
         plt.savefig(os.path.join(args.save_dir, 'precision_recall.png'), dpi=600)
         plt.close()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_path', default='criticality/stage2/model/stage2_2_epoch900.pt')
+    parser.add_argument('--model_path', default='criticality/stage2/model/stage2_new_1_epoch150.pt')
     parser.add_argument('--test_dir', default='/mnt/mnt1/linxuan/go2_data/data/stage1')
     parser.add_argument('--save_dir', default='criticality/stage2/results')
     parser.add_argument('--device', default='cpu')

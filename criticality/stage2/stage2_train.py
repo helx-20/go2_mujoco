@@ -60,8 +60,8 @@ def main(args):
             if test_auc > best_auc:
                 best_auc = test_auc
                 print(f'New best model with AUC={best_auc:.4f}')
-            torch.save(agent.q_net.state_dict(), os.path.join(args.save_dir, f'stage2_{args.worker_id}_epoch{epoch}.pt'))
-    torch.save(agent.q_net.state_dict(), os.path.join(args.save_dir, f'stage2_{args.worker_id}.pt'))
+            torch.save(agent.q_net.state_dict(), os.path.join(args.save_dir, f'stage2_new_{args.worker_id}_epoch{epoch}.pt'))
+    torch.save(agent.q_net.state_dict(), os.path.join(args.save_dir, f'stage2_new_{args.worker_id}.pt'))
 
 def test_model(test_loader, model, device):
     model.eval()
@@ -97,17 +97,17 @@ def test_model(test_loader, model, device):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--worker_id', type=int, default=0)
-    parser.add_argument('--stage1_model', default='criticality/stage1/model/stage1_criticality_best_1.pt')
+    parser.add_argument('--stage1_model', default='criticality/stage1/model/stage1_criticality_best_new_1.pt')
     parser.add_argument('--save_dir', default='criticality/stage2/model')
     parser.add_argument('--pos_path', default='/mnt/mnt1/linxuan/go2_data/data/stage2/replay_buffer_pos.npy')
     parser.add_argument('--neg_path', default='/mnt/mnt1/linxuan/go2_data/data/stage2/replay_buffer_neg.npy')
     parser.add_argument('--test_dir', default='/mnt/mnt1/linxuan/go2_data/data/stage1')
     parser.add_argument('--device', default='cuda:0')
-    parser.add_argument('--pos_ratio', default=0.2, type=float, help='ratio of positive samples in each training batch')
+    parser.add_argument('--pos_ratio', default=0.99, type=float, help='ratio of positive samples in each training batch')
     parser.add_argument('--epochs', default=1000, type=int)
-    parser.add_argument('--batch_size', default=1024, type=int)
+    parser.add_argument('--batch_size', default=512, type=int)
     parser.add_argument('--lr', default=1e-3, type=float)
-    parser.add_argument('--gamma', default=0.9, type=float)
+    parser.add_argument('--gamma', default=0.8, type=float)
     parser.add_argument('--target_update', default=50, type=int)
     parser.add_argument('--validate_interval', default=50, type=int)
     args = parser.parse_args()

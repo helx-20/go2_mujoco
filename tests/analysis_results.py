@@ -29,16 +29,17 @@ def analyze(path):
     crashes = []
     for file in os.listdir(path):
         data = np.load(os.path.join(path, file), allow_pickle=True).tolist()
-        print([data[i] for i in range(len(data)) if data[i] > 0])
-        if max(data) > 2:
+        # print([data[i] for i in range(len(data)) if data[i] > 0])
+        if max(data) > 1:
             print(max(data))
-        crashes.extend(data)
-    np.save("/home/linxuan/Embodied/go2_mujoco/results/nde_all.npy", np.array(crashes[:200000]))
+        else:
+            crashes.extend(data)
+    np.save("/home/linxuan/Embodied/go2_mujoco/results/nade_all.npy", np.array(crashes[:200000]))
     mean, rhf, var = calculate_val(crashes)
     print(f'Failure rate: {np.sum(crashes) / len(crashes)}')
     print(f'Mean: {mean[-1]:.6f}, Relative Half Width: {rhf[-1]:.6f}, Variance: {var[-1]:.6f}')
-    print(f'Total samples: {len(crashes)}, Crashes: {np.sum(crashes)}')
+    print(f'Total samples: {len(crashes)}, Num of crashes: {np.sum(np.array(crashes) > 0)}, Max weight: {np.max(crashes)}')
 
 if __name__ == '__main__':
-    root = 'results/nde'
+    root = 'results/results/nade'
     analyze(root)

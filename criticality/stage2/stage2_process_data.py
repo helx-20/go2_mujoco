@@ -20,13 +20,22 @@ if PROJECT_ROOT not in sys.path:
 
 from criticality.utils.data_utils import collect_nde_files, load_criticality_records
 
+def refine_truncated_episodes(ep_obs, ep_actions):
+    end_step = 40
+    for i in range(len(ep_obs)-1, 0, -1):
+        if np.linalg.norm(ep_obs[i][:2]) > 0.05:
+            end_step = i
+            break
+    return ep_obs[:end_step+1], ep_actions[:end_step+1]
 
 def main(args):
-    src = args.nde_folder
+    srcs = args.nde_folders
     out = args.out
     os.makedirs(out, exist_ok=True)
 
-    files = collect_nde_files(src)
+    files = []
+    for src in srcs:
+        files.extend(collect_nde_files(src))
     replay_buffer_pos = []
     replay_buffer_neg = []
     for f in tqdm.tqdm(files):
@@ -35,13 +44,11 @@ def main(args):
             ep_obs = ep.get('obs', [])
             ep_actions = ep.get('actions', [])
             ep_label = int(ep.get('label', 0))
+            if ep_label == 1 and len(ep_obs) == 40:
+                ep_obs, ep_actions = refine_truncated_episodes(ep_obs, ep_actions)
             L = len(ep_obs)
             if L == 0:
                 continue
-            if ep_label == 1:
-                pos_idx = set(range(max(0, L-1), L))
-            else:
-                pos_idx = set()
 
             for t in range(L):
                 cur = ep_obs[t]
@@ -81,7 +88,8 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--nde_folder', default='/mnt/mnt1/linxuan/go2_data/data/nde', help='folder where nde_*.npy are stored')
+    folders = ['/mnt/mnt1/linxuan/go2_data/data/nde1', '/mnt/mnt1/linxuan/go2_data/data/nde2']
+    parser.add_argument('--nde_folders', default=folders, help='folders where nde_*.npy are stored')
     parser.add_argument('--out', default='/mnt/mnt1/linxuan/go2_data/data/stage2', help='output folder for processed arrays')
     args = parser.parse_args()
     main(args)

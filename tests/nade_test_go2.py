@@ -137,20 +137,24 @@ def run(args):
                 outputs = crit_model(t_in)
             scores = torch.nn.functional.softmax(outputs, dim=1)[:, 1].squeeze().cpu().numpy()
 
-            # construct criticality distribution using threshold (binary) similar to MyLander
-            criticality = (scores > args.criticality_thresh).astype(float)
+            # construct criticality distribution
+            if args.criticality_thresh is not None:
+                criticality = (scores > args.criticality_thresh).astype(float)
+            else:
+                criticality = scores
             p_list = np.ones_like(criticality, dtype=float)
             p_list = p_list / p_list.sum()
-            if criticality.sum() > 0:
+            if np.max(criticality) > 3e-1 or np.sum(criticality) > 60:
                 criticality = criticality / criticality.sum()
                 pdf_array = (1.0 - args.epsilon) * criticality + args.epsilon * p_list
             else:
                 pdf_array = p_list
 
+            pdf_array = pdf_array / pdf_array.sum()  # ensure normalized
             idx = int(np.random.choice(len(pdf_array), p=pdf_array))
             action = np.asarray(candidates_arr[idx], dtype=np.float32)
             weight = p_list[idx] / pdf_array[idx]
-            if total_weight * weight < args.min_weight:
+            if total_weight * weight < args.min_weight or weight > 1.1:
                 pdf_array = p_list  # fallback to uniform if weight too small
                 idx = int(np.random.choice(len(pdf_array), p=pdf_array))
                 action = np.asarray(candidates_arr[idx], dtype=np.float32)
@@ -159,7 +163,7 @@ def run(args):
 
             next_obs, reward, terminated, truncated, info = env.step(action)
             obs = next_obs
-            done = bool(terminated) or bool(truncated)
+            done = bool(terminated) or bool(truncated) or bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
 
         # episode finished; determine crash/failure from last step's info
         crash = int(bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False)))
@@ -188,13 +192,14 @@ if __name__ == '__main__':
     parser.add_argument('--episodes', type=int, default=500)
     parser.add_argument('--max_steps', type=int, default=40)
     parser.add_argument('--log_interval', type=int, default=10)
-    parser.add_argument('--model_path', type=str, default='criticality/stage2/model/stage2_2_epoch300.pt', help='Optional criticality model')
+    parser.add_argument('--model_path', type=str, default='criticality/stage1/model/stage1_criticality_best_new_1.pt', help='Optional criticality model')
+    # parser.add_argument('--model_path', type=str, default='criticality/stage2/model/stage2_new_1_epoch150.pt', help='Optional criticality model')
     parser.add_argument('--candidates', type=int, default=16, help='Number of candidate terrain actions to sample per decision if not discretizing full grid')
     parser.add_argument('--out', type=str, default='results/nade/', help='Path to save weighted failures numpy array')
     parser.add_argument('--save_interval', type=int, default=10, help='Save results every N episodes at log interval')
     parser.add_argument('--epsilon', type=float, default=0.01, help='epsilon mixing weight for criticality/pdf')
-    parser.add_argument('--criticality_thresh', type=float, default=0.1, help='threshold to binarize criticality scores')
-    parser.add_argument('--min_weight', type=float, default=1e-6, help='minimum weight to apply to failures')
+    parser.add_argument('--criticality_thresh', type=float, default=None, help='threshold to binarize criticality scores')
+    parser.add_argument('--min_weight', type=float, default=1e-3, help='minimum weight to apply to failures')
     args = parser.parse_args()
     print('args:', args)
     # ensure output directory exists (treat --out as directory to mirror nde_test_go2.py behavior)
