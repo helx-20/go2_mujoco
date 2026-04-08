@@ -6,7 +6,7 @@ from typing import List
 def collect_nde_files(folder: str) -> List[str]:
 	files = []
 	for fn in os.listdir(folder):
-		if fn.startswith('nde_') and fn.endswith('.npy'):
+		if fn.endswith('.npy'):
 			files.append(os.path.join(folder, fn))
 	return sorted(files)
 

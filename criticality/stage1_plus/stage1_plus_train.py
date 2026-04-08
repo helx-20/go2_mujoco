@@ -63,14 +63,22 @@ def train(args):
     neg_train_path = os.path.join(data_dir, 'neg_train.npy')
     pos_val_path = os.path.join(data_dir, 'pos_val.npy')
     neg_val_path = os.path.join(data_dir, 'neg_val.npy')
+    pos_train_append_path = os.path.join(args.append_data_dir, 'pos_train.npy')
+    pos_val_append_path = os.path.join(args.append_data_dir, 'pos_val.npy')
 
     pos_train = np.load(pos_train_path)
+    pos_train_append = np.load(pos_train_append_path) if os.path.exists(pos_train_append_path) else None
+    if pos_train_append is not None:
+        pos_train = np.concatenate([pos_train, pos_train_append], axis=0)
     neg_train = np.load(neg_train_path)
     if len(neg_train) > len(pos_train) * args.train_ratio:
         neg_train = neg_train[np.random.choice(len(neg_train), size=len(pos_train) * args.train_ratio, replace=False)]
 
-    pos_val = np.load(pos_val_path) if os.path.exists(pos_val_path) else np.zeros((0, pos_train.shape[1]))
-    neg_val = np.load(neg_val_path) if os.path.exists(neg_val_path) else np.zeros((0, neg_train.shape[1]))
+    pos_val = np.load(pos_val_path)
+    neg_val = np.load(neg_val_path)
+    pos_val_append = np.load(pos_val_append_path) if os.path.exists(pos_val_append_path) else None
+    if pos_val_append is not None:
+        pos_val = np.concatenate([pos_val, pos_val_append], axis=0)
 
     X_train = np.concatenate([pos_train, neg_train], axis=0)
     y_train = np.concatenate([np.ones(len(pos_train)), np.zeros(len(neg_train))], axis=0)
@@ -152,12 +160,13 @@ def test(args):
 
     pos_test_path = os.path.join(data_dir, 'pos_test.npy')
     neg_test_path = os.path.join(data_dir, 'neg_test.npy')
-    if not (os.path.exists(pos_test_path) and os.path.exists(neg_test_path)):
-        print('No test split found (pos_test.npy / neg_test.npy). Skipping test evaluation.')
-        return
+    pos_test_append_path = os.path.join(args.append_data_dir, 'pos_test.npy')
 
     pos_test = np.load(pos_test_path)
     neg_test = np.load(neg_test_path)
+    if os.path.exists(pos_test_append_path):
+        pos_test_append = np.load(pos_test_append_path)
+        pos_test = np.concatenate([pos_test, pos_test_append], axis=0)
     X_test = np.concatenate([pos_test, neg_test], axis=0)
     y_test = np.concatenate([np.ones(len(pos_test)), np.zeros(len(neg_test))], axis=0)
 
@@ -235,13 +244,13 @@ def test(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', default='/mnt/mnt1/linxuan/go2_data/data/stage1')
-    parser.add_argument('--save_dir', default='criticality/stage1/model')
+    parser.add_argument('--append_data_dir', default='/mnt/mnt1/linxuan/go2_data/data/stage1_plus')
+    parser.add_argument('--save_dir', default='criticality/stage1_plus/model')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--epochs', default=100, type=int)
     parser.add_argument('--batch_size', default=512, type=int)
     parser.add_argument('--lr', default=1e-3, type=float)
     parser.add_argument('--hidden', default=256, type=int)
-    parser.add_argument('--hidden_layer', default=1, type=int)
     parser.add_argument('--model_idx', default=1, type=int, help='index to append to saved model filename for multiple runs')
     parser.add_argument('--train_ratio', default=100, type=int)
     parser.add_argument('--test', action='store_true', help='Run test evaluation after training')
@@ -251,3 +260,4 @@ if __name__ == '__main__':
         test(args)
     else:
         train(args)
+        test(args)

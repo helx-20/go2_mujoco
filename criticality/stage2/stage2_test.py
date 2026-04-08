@@ -62,10 +62,12 @@ def main(args):
             fp += int(((preds == 1) & (yb == 0)).sum().item())
             fn += int(((preds == 0) & (yb == 1)).sum().item())
             probs = torch.softmax(logits, dim=1)[:, 1]
-            # if max(yb) == 1:
-            #     print('pos score:', torch.mean(probs[torch.where(yb == 1)[0]]))
-            # if min(yb) == 0:
-            #     print('neg score:', torch.mean(probs[torch.where(yb == 0)[0]]))
+            if max(yb) == 1:
+                print('pos mean score:', torch.mean(probs[torch.where(yb == 1)[0]]))
+                print('pos min score:', torch.min(probs[torch.where(yb == 1)[0]]))
+            if min(yb) == 0:
+                print('neg mean score:', torch.mean(probs[torch.where(yb == 0)[0]]))
+                print('neg max score:', torch.max(probs[torch.where(yb == 0)[0]]))
             y_score_test.extend(probs.cpu().numpy().tolist())
             y_true_test.extend(yb.cpu().numpy().tolist())
     test_acc = correct / total if total > 0 else 0.0
@@ -103,7 +105,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_path', default='criticality/stage2/model/stage2_new_1_epoch150.pt')
+    parser.add_argument('--model_path', default='criticality/stage2/model/stage2_new_1_epoch5950.pt')
     parser.add_argument('--test_dir', default='/mnt/mnt1/linxuan/go2_data/data/stage1')
     parser.add_argument('--save_dir', default='criticality/stage2/results')
     parser.add_argument('--device', default='cpu')

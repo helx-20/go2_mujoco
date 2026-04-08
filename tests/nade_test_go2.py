@@ -101,11 +101,17 @@ def run(args):
             centers.reshape(-1)[d] = 0.5 * (e[b] + e[b + 1])
         return centers, bins
 
+    criticality_data_all = []
     for i in range(n):
         obs, _ = env.reset()
         done = False
         total_weight = 1.0
         steps = 0
+
+        # per-episode buffers
+        ep_obs = []
+        ep_actions = []
+
         while not done:
             steps += 1
             
@@ -161,6 +167,10 @@ def run(args):
                 weight = 1.0
             total_weight *= weight
 
+            if args.criticality_out is not None:
+                ep_obs.append(obs)
+                ep_actions.append(action)
+
             next_obs, reward, terminated, truncated, info = env.step(action)
             obs = next_obs
             done = bool(terminated) or bool(truncated) or bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
@@ -170,6 +180,11 @@ def run(args):
         weighted_failures.append(crash * total_weight)
         print(f"episode {i+1}/{n} steps={steps} crash={crash>0} weight={total_weight:.6f}")
 
+        if args.criticality_out is not None and crash:
+            label = 1
+            crash_type = 'fallen' if info.get('fallen', False) else 'collided' if info.get('collided', False) else 'base_collision' if info.get('base_collision', False) else 'thigh_collision' if info.get('thigh_collision', False) else 'stuck' if info.get('stuck', False) else 'none'
+            criticality_data_all.append({'obs': ep_obs, 'actions': ep_actions, 'label': label, 'crash_type': crash_type})
+
         if (i + 1) % args.log_interval == 0:
             Mean, RHF, Val = calculate_val(weighted_failures)
             print(f"episode {i+1}/{n}  samples={len(weighted_failures)}  weighted_mean={Mean[-1]:.6f}  RHF={RHF[-1]:.6f}")
@@ -177,6 +192,12 @@ def run(args):
         if (i + 1) % save_interval == 0:
             if out_path:
                 np.save(os.path.join(out_path, f'nade_{args.worker_id}.npy'), np.array(weighted_failures, dtype=np.float32))
+            if args.criticality_out is not None:
+                try:
+                    np.save(os.path.join(args.criticality_out, f'nade_{args.worker_id}.npy'), np.array(criticality_data_all))
+                    print(f'Wrote criticality data to {args.criticality_out} (samples={len(criticality_data_all)})')
+                except Exception as e:
+                    print('Failed to save criticality data:', e)
 
     Mean, RHF, Val = calculate_val(weighted_failures)
     print("DONE")
@@ -185,6 +206,12 @@ def run(args):
     if out_path:
         np.save(os.path.join(out_path, f'nade_{args.worker_id}.npy'), np.array(weighted_failures, dtype=np.float32))
 
+    if args.criticality_out is not None:
+        try:
+            np.save(os.path.join(args.criticality_out, f'nade_{args.worker_id}.npy'), np.array(criticality_data_all))
+            print(f'Wrote criticality data to {args.criticality_out} (samples={len(criticality_data_all)})')
+        except Exception as e:
+            print('Failed to save criticality data:', e)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -193,9 +220,10 @@ if __name__ == '__main__':
     parser.add_argument('--max_steps', type=int, default=40)
     parser.add_argument('--log_interval', type=int, default=10)
     parser.add_argument('--model_path', type=str, default='criticality/stage1/model/stage1_criticality_best_new_1.pt', help='Optional criticality model')
-    # parser.add_argument('--model_path', type=str, default='criticality/stage2/model/stage2_new_1_epoch150.pt', help='Optional criticality model')
+    # parser.add_argument('--model_path', type=str, default='criticality/stage2/model/stage2_new_1_epoch5950.pt', help='Optional criticality model')
     parser.add_argument('--candidates', type=int, default=16, help='Number of candidate terrain actions to sample per decision if not discretizing full grid')
     parser.add_argument('--out', type=str, default='results/nade/', help='Path to save weighted failures numpy array')
+    parser.add_argument('--criticality_out', type=str, default=None, help='Optional path to save criticality dataset (obs, actions, labels)')
     parser.add_argument('--save_interval', type=int, default=10, help='Save results every N episodes at log interval')
     parser.add_argument('--epsilon', type=float, default=0.01, help='epsilon mixing weight for criticality/pdf')
     parser.add_argument('--criticality_thresh', type=float, default=None, help='threshold to binarize criticality scores')
@@ -205,4 +233,6 @@ if __name__ == '__main__':
     # ensure output directory exists (treat --out as directory to mirror nde_test_go2.py behavior)
     if args.out:
         os.makedirs(args.out, exist_ok=True)
+    if args.criticality_out:
+        os.makedirs(args.criticality_out, exist_ok=True)
     run(args)

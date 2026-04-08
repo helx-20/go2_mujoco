@@ -38,6 +38,7 @@ def main(args):
         files.extend(collect_nde_files(src))
     replay_buffer_pos = []
     replay_buffer_neg = []
+    replay_buffer_pos_critical = []
     for f in tqdm.tqdm(files):
         recs = load_criticality_records(f)
         for ep in recs:
@@ -49,6 +50,8 @@ def main(args):
             L = len(ep_obs)
             if L == 0:
                 continue
+            if ep_label == 1:
+                critical_steps = set(range(max(0, L-4), L))
 
             for t in range(L):
                 cur = ep_obs[t]
@@ -75,6 +78,14 @@ def main(args):
                         'reward': reward,
                         'done': done
                     })
+                    if t in critical_steps:
+                        replay_buffer_pos_critical.append({
+                            'input': np.asarray(cur, dtype=np.float32),
+                            'next_input': np.asarray(next_o, dtype=np.float32),
+                            'action': np.asarray(action, dtype=np.float32),
+                            'reward': reward,
+                            'done': done
+                        })  # upsample critical transitions
 
     if len(replay_buffer_pos) == 0 and len(replay_buffer_neg) == 0:
         print('No transitions collected')
@@ -82,8 +93,10 @@ def main(args):
 
     np.save(os.path.join(out, 'replay_buffer_pos.npy'), np.array(replay_buffer_pos, dtype=object), allow_pickle=True)
     np.save(os.path.join(out, 'replay_buffer_neg.npy'), np.array(replay_buffer_neg, dtype=object), allow_pickle=True)
+    np.save(os.path.join(out, 'replay_buffer_pos_critical.npy'), np.array(replay_buffer_pos_critical, dtype=object), allow_pickle=True)
     print(f'Saved positive replay buffer with {len(replay_buffer_pos)} transitions to', os.path.join(out, 'replay_buffer_pos.npy'))
     print(f'Saved negative replay buffer with {len(replay_buffer_neg)} transitions to', os.path.join(out, 'replay_buffer_neg.npy'))
+    print(f'Saved critical positive replay buffer with {len(replay_buffer_pos_critical)} transitions to', os.path.join(out, 'replay_buffer_pos_critical.npy'))
 
 
 if __name__ == '__main__':
