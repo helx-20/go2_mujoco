@@ -149,7 +149,7 @@ def train(args):
         if val_auc > best_auc:
             best_auc = val_auc
             os.makedirs(args.save_dir, exist_ok=True)
-            torch.save(model.state_dict(), os.path.join(args.save_dir, f'stage1_criticality_best_new_{args.model_idx}.pt'))
+            torch.save(model.state_dict(), os.path.join(args.save_dir, f'stage1_plus_criticality_best_new_{args.model_idx}.pt'))
 
     print('Done. Best val auc:', best_auc)
 
@@ -175,7 +175,7 @@ def test(args):
     model = SimpleClassifier(input_dim=input_dim, hidden=args.hidden).to(device)
 
     # if we saved a best model, load it for test
-    best_model_path = os.path.join(args.save_dir, f'stage1_criticality_best_new_{args.model_idx}.pt')
+    best_model_path = os.path.join(args.save_dir, f'stage1_plus_criticality_best_new_{args.model_idx}.pt')
     if os.path.exists(best_model_path):
         try:
             model.load_state_dict(torch.load(best_model_path, map_location=device))
