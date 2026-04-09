@@ -24,13 +24,13 @@ register_env("my_env", env_creator)
 ray.init(local_mode=True, include_dashboard=False, ignore_reinit_error=True)
 algo = PPO(config={"env": "my_env", "env_config": yaml_conf})
 
-checkpoint_path = "/home/linxuan/ray_results/training_results/PPO_my_env_2640d_00000_0_2026-04-03_08-14-58/checkpoint_000065"  # replace with your checkpoint path
+checkpoint_path = "/home/linxuan/ray_results/training_results/PPO_my_env_781fd_00000_0_2026-04-09_11-09-06/checkpoint_000175"  # replace with your checkpoint path
 algo.restore(checkpoint_path)
 
 # Try to get the policy and export the model. Newer RLlib policies may provide
 # `export_model`. If not, fallback to tracing/saving the underlying torch module.
 p = algo.get_policy()
-export_dir = "./new_model/"
+export_dir = "epsilon/model/"
 p.export_model(export_dir)
 
 import os

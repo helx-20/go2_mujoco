@@ -7,6 +7,9 @@ pandas
 Pillow
 tqdm
 scikit-learn
+ray
+ray[rllib]
+ray[tune]
 
 absl-py==2.3.1
 cloudpickle==3.1.2
