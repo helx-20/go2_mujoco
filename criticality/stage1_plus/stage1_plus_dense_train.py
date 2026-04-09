@@ -6,10 +6,9 @@ import torch
 from torch.utils.data import TensorDataset, DataLoader
 import torch.nn as nn
 import torch.optim as optim
-try:
-    import matplotlib.pyplot as plt
-except Exception:
-    plt = None
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # ensure project root is on sys.path so 'criticality' can be imported regardless of cwd
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,6 +17,7 @@ if PROJECT_ROOT not in sys.path:
 
 from criticality.utils.criticality_model import SimpleClassifier
 from sklearn.metrics import auc
+from criticality.utils.grad_ops import get_gradient_norms_var_cls_parallel
 
 
 def precision_recall_curve(y_true, y_score, num_thresholds=1000):
@@ -63,14 +63,22 @@ def train(args):
     neg_train_path = os.path.join(data_dir, 'neg_train.npy')
     pos_val_path = os.path.join(data_dir, 'pos_val.npy')
     neg_val_path = os.path.join(data_dir, 'neg_val.npy')
+    pos_train_append_path = os.path.join(args.append_data_dir, 'pos_train.npy')
+    pos_val_append_path = os.path.join(args.append_data_dir, 'pos_val.npy')
 
     pos_train = np.load(pos_train_path)
+    pos_train_append = np.load(pos_train_append_path) if os.path.exists(pos_train_append_path) else None
+    if pos_train_append is not None:
+        pos_train = np.concatenate([pos_train, pos_train_append], axis=0)
     neg_train = np.load(neg_train_path)
     if len(neg_train) > len(pos_train) * args.train_ratio:
         neg_train = neg_train[np.random.choice(len(neg_train), size=len(pos_train) * args.train_ratio, replace=False)]
 
-    pos_val = np.load(pos_val_path) if os.path.exists(pos_val_path) else np.zeros((0, pos_train.shape[1]))
-    neg_val = np.load(neg_val_path) if os.path.exists(neg_val_path) else np.zeros((0, neg_train.shape[1]))
+    pos_val = np.load(pos_val_path)
+    neg_val = np.load(neg_val_path)
+    # pos_val_append = np.load(pos_val_append_path) if os.path.exists(pos_val_append_path) else None
+    # if pos_val_append is not None:
+    #     pos_val = np.concatenate([pos_val, pos_val_append], axis=0)
 
     X_train = np.concatenate([pos_train, neg_train], axis=0)
     y_train = np.concatenate([np.ones(len(pos_train)), np.zeros(len(neg_train))], axis=0)
@@ -79,12 +87,24 @@ def train(args):
     y_val = np.concatenate([np.ones(len(pos_val)), np.zeros(len(neg_val))], axis=0) if (len(pos_val) + len(neg_val)) > 0 else np.zeros((0,))
 
     input_dim = X_train.shape[1]
-    model = SimpleClassifier(input_dim=input_dim, hidden=args.hidden, hidden_layer=args.hidden_layer).to(device)
+    model = SimpleClassifier(input_dim=input_dim, hidden=args.hidden).to(device)
+    # optionally initialize from an existing stage1 model
+    init_path = getattr(args, 'initial_model_path', '')
+    if init_path:
+        if os.path.exists(init_path):
+            try:
+                state = torch.load(init_path, map_location=device)
+                model.load_state_dict(state)
+                print(f'Loaded initial weights from {init_path}')
+            except Exception as e:
+                print(f'Warning: failed to load initial model {init_path}: {e}')
+        else:
+            print(f'Initial model path {init_path} does not exist, continuing with random init')
 
     train_ds = TensorDataset(torch.from_numpy(X_train).float(), torch.from_numpy(y_train).long())
     val_ds = TensorDataset(torch.from_numpy(X_val).float(), torch.from_numpy(y_val).long())
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
+    base_train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
 
     criterion = nn.CrossEntropyLoss()
@@ -92,6 +112,31 @@ def train(args):
 
     best_auc = 0.0
     for epoch in range(args.epochs):
+        # IS full-mix (dense) sampling: compute per-sample gradient-norms and sample a subset every epoch
+        num_samples = getattr(args, 'dense_num_samples', 2048)
+
+        # compute per-sample gradient norms in parallel using functorch/vmap implementation
+        model.eval()
+        grad_loader = DataLoader(train_ds, batch_size=max(512, args.batch_size), shuffle=False)
+        grad_norms = get_gradient_norms_var_cls_parallel(model, grad_loader, device=device, criterion=criterion)
+        probs = grad_norms.cpu().numpy().astype(float)
+        from criticality.utils.rarity import calculate_rarity 
+        rarity = calculate_rarity(probs.reshape(-1, 1))
+        print("rarity:", rarity)
+        probs = probs / probs.sum()
+        n = len(probs)
+        k = num_samples
+        idx = np.random.choice(n, size=k, replace=False, p=probs)
+        mix_num = int(num_samples * args.mix_ratio)
+        mix_idx = np.random.choice(n, size=mix_num, replace=False)
+        idx = np.concatenate([idx, mix_idx], axis=0)
+
+        if idx.size > 0:
+            sub_dataset = torch.utils.data.Subset(train_ds, idx.tolist())
+            train_loader = DataLoader(sub_dataset, batch_size=args.batch_size, shuffle=True)
+        else:
+            train_loader = base_train_loader
+
         model.train()
         total = 0
         correct = 0
@@ -141,7 +186,8 @@ def train(args):
         if val_auc > best_auc:
             best_auc = val_auc
             os.makedirs(args.save_dir, exist_ok=True)
-            torch.save(model.state_dict(), os.path.join(args.save_dir, f'stage1_criticality_best_new_{args.model_idx}.pt'))
+            torch.save(model.state_dict(), os.path.join(args.save_dir, f'stage1_plus_criticality_best_new_{args.model_idx}.pt'))
+            print(f'New best model saved with val_auc={best_auc:.4f} at epoch {epoch+1}')
 
     print('Done. Best val auc:', best_auc)
 
@@ -152,21 +198,22 @@ def test(args):
 
     pos_test_path = os.path.join(data_dir, 'pos_test.npy')
     neg_test_path = os.path.join(data_dir, 'neg_test.npy')
-    if not (os.path.exists(pos_test_path) and os.path.exists(neg_test_path)):
-        print('No test split found (pos_test.npy / neg_test.npy). Skipping test evaluation.')
-        return
+    pos_test_append_path = os.path.join(args.append_data_dir, 'pos_test.npy')
 
     pos_test = np.load(pos_test_path)
     neg_test = np.load(neg_test_path)
+    # if os.path.exists(pos_test_append_path):
+    #     pos_test_append = np.load(pos_test_append_path)
+    #     pos_test = np.concatenate([pos_test, pos_test_append], axis=0)
     X_test = np.concatenate([pos_test, neg_test], axis=0)
     y_test = np.concatenate([np.ones(len(pos_test)), np.zeros(len(neg_test))], axis=0)
 
     # build model architecture from test data shape
     input_dim = X_test.shape[1]
-    model = SimpleClassifier(input_dim=input_dim, hidden=args.hidden, hidden_layer=args.hidden_layer).to(device)
+    model = SimpleClassifier(input_dim=input_dim, hidden=args.hidden).to(device)
 
     # if we saved a best model, load it for test
-    best_model_path = os.path.join(args.save_dir, f'stage1_criticality_best_new_{args.model_idx}.pt')
+    best_model_path = os.path.join(args.save_dir, f'stage1_plus_criticality_best_new_{args.model_idx}.pt')
     if os.path.exists(best_model_path):
         try:
             model.load_state_dict(torch.load(best_model_path, map_location=device))
@@ -235,16 +282,19 @@ def test(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', default='/mnt/mnt1/linxuan/go2_data/data/stage1')
-    parser.add_argument('--save_dir', default='criticality/stage1/model')
+    parser.add_argument('--append_data_dir', default='/mnt/mnt1/linxuan/go2_data/data/stage1_plus')
+    parser.add_argument('--save_dir', default='criticality/stage1_plus/model')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--epochs', default=100, type=int)
-    parser.add_argument('--batch_size', default=512, type=int)
+    parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--lr', default=1e-3, type=float)
     parser.add_argument('--hidden', default=256, type=int)
-    parser.add_argument('--hidden_layer', default=1, type=int)
     parser.add_argument('--model_idx', default=1, type=int, help='index to append to saved model filename for multiple runs')
     parser.add_argument('--train_ratio', default=100, type=int)
+    parser.add_argument('--dense_num_samples', default=512, type=int, help='Number of samples to draw each epoch for dense training')
+    parser.add_argument('--mix_ratio', default=8, type=float)
     parser.add_argument('--test', action='store_true', help='Run test evaluation after training')
+    parser.add_argument('--initial_model_path', default='criticality/stage1/model/stage1_criticality_best_new_1.pt', help='Path to a stage1 model .pt file to initialize weights from')
     args = parser.parse_args()
     print('args:', args)
     if args.test:

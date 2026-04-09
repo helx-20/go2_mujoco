@@ -29,8 +29,8 @@ def analyze(path):
     crashes = []
     for file in os.listdir(path):
         data = np.load(os.path.join(path, file), allow_pickle=True).tolist()
-        print([data[i] for i in range(len(data)) if data[i] > 0])
-        if max(data) > 1:
+        # print([data[i] for i in range(len(data)) if data[i] > 0])
+        if max(data) > 0.5:
             print(max(data))
         else:
             crashes.extend(data)
@@ -41,5 +41,5 @@ def analyze(path):
     print(f'Total samples: {len(crashes)}, Num of crashes: {np.sum(np.array(crashes) > 0)}, Max weight: {np.max(crashes)}')
 
 if __name__ == '__main__':
-    root = 'results/results/nade'
+    root = 'results/nade'
     analyze(root)

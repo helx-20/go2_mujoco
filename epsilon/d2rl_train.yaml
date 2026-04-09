@@ -1,0 +1,5 @@
+experiment_name: "training_results"
+local_dir: "/mnt/mnt1/linxuan/go2_data/data/epsilon/"
+data_folder: "raw_data"
+num_workers: 12
+clip_reward_threshold: 100
