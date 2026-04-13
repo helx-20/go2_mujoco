@@ -16,10 +16,10 @@ def analysis(root_path, output_path, nde_path=None):
 
     if nde_path is not None:
         nde_data = np.load(nde_path)[:200000].tolist()
-        nde_data = np.zeros((200000,))
-        nde_data[:int(np.sum(np.array(result_data))/len(result_data)*200000)] += 1.0
-        np.random.shuffle(nde_data)
-        nde_data = nde_data.tolist()
+        # nde_data = np.zeros((200000,))
+        # nde_data[:int(np.sum(np.array(result_data))/len(result_data)*200000)] += 1.0
+        # np.random.shuffle(nde_data)
+        # nde_data = nde_data.tolist()
         print("NDE crash rate:", np.sum(np.array(nde_data))/len(nde_data))
 
     confidence_interval = 0.1
@@ -38,8 +38,8 @@ def analysis(root_path, output_path, nde_path=None):
 
     fig = plt.figure(figsize=(8,6), dpi=100)
     plt.ylim(0,1.6e-3)
-    plt.plot(crash_mean_result_numpy, label=f"NADE: {crash_mean_result_numpy[-1]:.2e}", color="#012169", linewidth=2)
-    plt.fill_between(range(len(crash_mean_result_numpy)), (1-half_CI_numpy)*crash_mean_result_numpy, (1+half_CI_numpy)*crash_mean_result_numpy, color=(198/255, 222/255, 1.0), alpha=0.75)
+    plt.plot(crash_mean_result_numpy, label=f"NADE: {crash_mean_result_numpy[-1]:.2e}", color="#8B0000", linewidth=2)
+    plt.fill_between(range(len(crash_mean_result_numpy)), (1-half_CI_numpy)*crash_mean_result_numpy, (1+half_CI_numpy)*crash_mean_result_numpy, color=(1.0, 215/255, 215/255), alpha=0.75)
     # plt.plot([0,len(crash_mean_result_numpy)],[crash_mean_result_numpy[-1]]*2,"--",label=f"NADE: {crash_mean_result_numpy[-1]:.2e}", alpha=0.5)
 
     if nde_path is not None:
@@ -48,8 +48,8 @@ def analysis(root_path, output_path, nde_path=None):
         nde_half_CI = z*nde_result.rolling(len(nde_result), min_periods=1).std()/(np.sqrt(np.array(range(1, len(nde_result)+1)))*nde_crash_mean_result)
         nde_half_CI_numpy = nde_half_CI.to_numpy()
         nde_crash_mean_result_numpy = nde_crash_mean_result.to_numpy()
-        plt.plot(nde_crash_mean_result_numpy, label=f"NDE: {nde_crash_mean_result_numpy[-1]:.2e}", color="#8B0000", linewidth=2)
-        plt.fill_between(range(len(nde_crash_mean_result_numpy)), (1-nde_half_CI_numpy)*nde_crash_mean_result_numpy, (1+nde_half_CI_numpy)*nde_crash_mean_result_numpy, color=(1.0, 215/255, 215/255), alpha=0.55)
+        plt.plot(nde_crash_mean_result_numpy, label=f"NDE: {nde_crash_mean_result_numpy[-1]:.2e}", color="#012169", linewidth=2)
+        plt.fill_between(range(len(nde_crash_mean_result_numpy)), (1-nde_half_CI_numpy)*nde_crash_mean_result_numpy, (1+nde_half_CI_numpy)*nde_crash_mean_result_numpy, color=(198/255, 222/255, 1.0), alpha=0.55)
         plt.plot([0,len(nde_crash_mean_result_numpy)],[nde_crash_mean_result_numpy[-1]]*2, "--", color="#000000", alpha=1, linewidth=1)
 
     plt.xlabel("Number of tests",fontsize=18)
@@ -73,30 +73,30 @@ def analysis(root_path, output_path, nde_path=None):
     plt.rc('font', **font)
      
     plt.figure(figsize=(12, 6))
-    plt.plot(RHF, label='NADE RHF', color='#012169', linewidth=2)
+    plt.plot(RHF, label='NADE RHF', color='#8B0000', linewidth=2)
 
     try:
         RHF_arr = np.array(RHF)
         idx_nade = np.where(RHF_arr <= 0.3)[0]
         if idx_nade.size > 0:
             x_nade = int(idx_nade[0])
-            plt.axvline(x=x_nade, color='#012169', linestyle='--', linewidth=1.5, alpha=0.9)
-            plt.plot([x_nade], [RHF_arr[x_nade]], marker='o', color='#012169')
-            plt.text(x_nade + max(1, int(len(RHF_arr)*0.02)), RHF_arr[x_nade] + 0.02, f"{x_nade:.2e}", color='#012169', fontsize=16)
+            plt.axvline(x=x_nade, color='#8B0000', linestyle='--', linewidth=1.5, alpha=0.9)
+            plt.plot([x_nade], [RHF_arr[x_nade]], marker='o', color='#8B0000')
+            plt.text(x_nade + max(1, int(len(RHF_arr)*0.02)), RHF_arr[x_nade] + 0.02, f"{x_nade:.2e}", color='#8B0000', fontsize=16)
     except Exception:
         pass
 
     if nde_path is not None:
         nde_RHF = nde_half_CI_numpy.tolist()
-        plt.plot(nde_RHF, label='NDE RHF', color='#8B0000', linewidth=2)
+        plt.plot(nde_RHF, label='NDE RHF', color='#012169', linewidth=2)
         try:
             nde_RHF_arr = np.array(nde_RHF)
             idx_nde = np.where(nde_RHF_arr <= 0.3)[0]
             if idx_nde.size > 0:
                 x_nde = int(idx_nde[0])
-                plt.axvline(x=x_nde, color='#8B0000', linestyle='--', linewidth=1.5, alpha=0.9)
-                plt.plot([x_nde], [nde_RHF_arr[x_nde]], marker='o', color='#8B0000')
-                plt.text(x_nde + max(1, int(len(nde_RHF_arr)*0.02)), nde_RHF_arr[x_nde] + 0.02, f"{x_nde:.2e}", color='#8B0000', fontsize=16)
+                plt.axvline(x=x_nde, color='#012169', linestyle='--', linewidth=1.5, alpha=0.9)
+                plt.plot([x_nde], [nde_RHF_arr[x_nde]], marker='o', color='#012169')
+                plt.text(x_nde + max(1, int(len(nde_RHF_arr)*0.02)), nde_RHF_arr[x_nde] + 0.02, f"{x_nde:.2e}", color='#012169', fontsize=16)
         except Exception:
             pass
         plt.plot([0, len(nde_RHF)], [0.3]*2, "--", color="#000000", alpha=1, linewidth=1, label='RHF = 0.3')
@@ -135,12 +135,12 @@ def analysis(root_path, output_path, nde_path=None):
     plt.figure(figsize=(8, 6))
     nade_mean = np.mean(boostrap_results)
     nade_std = np.std(boostrap_results)
-    nade_bars = plt.bar(['NADE'], [nade_mean], width=0.7, yerr=[nade_std], capsize=10, color='#012169')
+    nade_bars = plt.bar(['NADE'], [nade_mean], width=0.7, yerr=[nade_std], capsize=10, color='#8B0000')
     nde_bars = None
     if nde_path is not None:
         nde_mean = np.mean(boostrap_nde)
         nde_std = np.std(boostrap_nde)
-        nde_bars = plt.bar(['NDE'], [nde_mean], width=0.7, yerr=[nde_std], capsize=10, color='#8B0000')
+        nde_bars = plt.bar(['NDE'], [nde_mean], width=0.7, yerr=[nde_std], capsize=10, color='#012169')
     # annotate bars with mean ± std
     for bar in nade_bars:
         h = bar.get_height() + nade_std + nade_std*0.1

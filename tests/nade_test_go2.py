@@ -74,32 +74,23 @@ def run(args):
     action_space = env.action_space
 
     # prepare discretization edges for actions: 10 bins per dimension (match nde_test_go2.py)
-    action_edges = None
-    if getattr(action_space, 'shape', None) and action_space.shape[0] > 0:
-        try:
-            low = np.asarray(action_space.low, dtype=np.float32)
-            high = np.asarray(action_space.high, dtype=np.float32)
-            # avoid zero-range
-            high = np.where(high == low, low + 1.0, high)
-            action_edges = [np.linspace(low[d], high[d], num=11) for d in range(low.shape[0])]
-        except Exception:
-            action_edges = None
+    low = np.asarray(action_space.low, dtype=np.float32)
+    high = np.asarray(action_space.high, dtype=np.float32)
+    # avoid zero-range
+    high = np.where(high == low, low + 1.0, high)
+    action_edges = [np.linspace(low[d], high[d], num=11) for d in range(low.shape[0])]
 
-    def sample_discrete_action():
-        # returns (continuous_centers_array, discrete_bins_array)
-        if action_edges is None:
-            a = action_space.sample()
-            return np.asarray(a, dtype=np.float32), None
-
-        # sample bins uniformly per-dimension and map to continuous center values
-        bins = np.random.randint(0, 10, size=action_space.shape)
-        centers = np.zeros(action_space.shape, dtype=np.float32)
-        flat_bins = np.asarray(bins).reshape(-1)
-        for d in range(flat_bins.shape[0]):
-            b = int(flat_bins[d])
-            e = action_edges[d]
-            centers.reshape(-1)[d] = 0.5 * (e[b] + e[b + 1])
-        return centers, bins
+    # Build full discrete action grid (10 bins per dim) and evaluate in parallel
+    D = int(action_space.shape[0])
+    grids = np.meshgrid(*[np.arange(10) for _ in range(D)], indexing='ij')
+    bins_flat = np.stack([g.reshape(-1) for g in grids], axis=1).astype(np.int64)
+    num_actions = bins_flat.shape[0]
+    centers = np.zeros((num_actions, D), dtype=np.float32)
+    for d in range(D):
+        e = action_edges[d]
+        b_idx = bins_flat[:, d]
+        centers[:, d] = 0.5 * (e[b_idx] + e[b_idx + 1])
+    candidates_arr = centers
 
     criticality_data_all = []
     for i in range(n):
@@ -114,26 +105,6 @@ def run(args):
 
         while not done:
             steps += 1
-            
-            # Build full discrete action grid (10 bins per dim) and evaluate in parallel
-            if action_edges is None:
-                # fallback: sample candidate actions if edges unavailable
-                candidates = []
-                for _ in range(args.candidates):
-                    centers_c, bins_c = sample_discrete_action()
-                    candidates.append(np.asarray(centers_c, dtype=np.float32))
-                candidates_arr = np.stack(candidates, axis=0)
-            else:
-                D = int(action_space.shape[0])
-                grids = np.meshgrid(*[np.arange(10) for _ in range(D)], indexing='ij')
-                bins_flat = np.stack([g.reshape(-1) for g in grids], axis=1).astype(np.int64)
-                num_actions = bins_flat.shape[0]
-                centers = np.zeros((num_actions, D), dtype=np.float32)
-                for d in range(D):
-                    e = action_edges[d]
-                    b_idx = bins_flat[:, d]
-                    centers[:, d] = 0.5 * (e[b_idx] + e[b_idx + 1])
-                candidates_arr = centers
 
             # Evaluate crit_model in batch: try obs+action first, fallback to obs-only
             with torch.no_grad():
@@ -150,8 +121,13 @@ def run(args):
                 criticality = scores
             p_list = np.ones_like(criticality, dtype=float)
             p_list = p_list / p_list.sum()
-            if np.max(criticality) > 5e-1 or np.sum(criticality) > 100:
-                criticality = criticality / criticality.sum()
+            if np.max(criticality) > args.criticality_max_thresh: # or np.sum(criticality) > 20000 * args.criticality_max_thresh:
+                # top_k = 10000
+                # top_k_indices = np.argpartition(criticality, -top_k)[-top_k:]
+                # invalid_action_mask = np.ones_like(criticality, dtype=bool)
+                # invalid_action_mask[top_k_indices] = False
+                # criticality[invalid_action_mask] = 0
+                # criticality = criticality / criticality.sum()
                 pdf_array = (1.0 - args.epsilon) * criticality + args.epsilon * p_list
             else:
                 pdf_array = p_list
@@ -160,7 +136,13 @@ def run(args):
             idx = int(np.random.choice(len(pdf_array), p=pdf_array))
             action = np.asarray(candidates_arr[idx], dtype=np.float32)
             weight = p_list[idx] / pdf_array[idx]
-            if total_weight * weight < args.min_weight or weight > 1.1:
+            print(weight)
+            # if weight > 0. and abs(weight - 1) > 1e-5:
+            #     idx = int(np.argmax(pdf_array))
+            #     action = np.asarray(candidates_arr[idx], dtype=np.float32)
+            #     weight = p_list[idx] / 1 # pdf_array[idx]
+
+            if total_weight * weight < args.min_weight:
                 pdf_array = p_list  # fallback to uniform if weight too small
                 idx = int(np.random.choice(len(pdf_array), p=pdf_array))
                 action = np.asarray(candidates_arr[idx], dtype=np.float32)
@@ -222,16 +204,16 @@ if __name__ == '__main__':
     # parser.add_argument('--model_path', type=str, default='criticality/stage1/model/stage1_criticality_best_new_1.pt', help='Optional criticality model')
     parser.add_argument('--model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Optional criticality model')
     # parser.add_argument('--model_path', type=str, default='criticality/stage2/model/stage2_new_1_epoch5950.pt', help='Optional criticality model')
-    parser.add_argument('--candidates', type=int, default=16, help='Number of candidate terrain actions to sample per decision if not discretizing full grid')
     parser.add_argument('--out', type=str, default='results/nade/', help='Path to save weighted failures numpy array')
     parser.add_argument('--criticality_out', type=str, default=None, help='Optional path to save criticality dataset (obs, actions, labels)')
-    parser.add_argument('--save_interval', type=int, default=10, help='Save results every N episodes at log interval')
+    parser.add_argument('--save_interval', type=int, default=1, help='Save results every N episodes at log interval')
     parser.add_argument('--epsilon', type=float, default=0.01, help='epsilon mixing weight for criticality/pdf')
     parser.add_argument('--criticality_thresh', type=float, default=None, help='threshold to binarize criticality scores')
+    parser.add_argument('--criticality_max_thresh', type=float, default=3e-1, help='threshold to determine if crit scores are meaningful for weighting')
     parser.add_argument('--min_weight', type=float, default=1e-3, help='minimum weight to apply to failures')
     args = parser.parse_args()
     print('args:', args)
-    # ensure output directory exists (treat --out as directory to mirror nde_test_go2.py behavior)
+    # ensure output directory exists
     if args.out:
         os.makedirs(args.out, exist_ok=True)
     if args.criticality_out:

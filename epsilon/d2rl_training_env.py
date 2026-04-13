@@ -11,7 +11,7 @@ class D2RLTrainingEnv(core.Env):
     def __init__(self, yaml_conf):
         self.yaml_conf = yaml_conf
         self.action_space = spaces.Box(low=0.001, high=0.999, shape=(1,))
-        self.observation_space = spaces.Box(low=-10, high=10, shape=(56,))
+        self.observation_space = spaces.Box(low=-10, high=10, shape=(52,))
 
         self.constant, self.weight_reward, self.exposure, self.positive_weight_reward = 0, 0, 0, 0  # some customized metric logging
         self.total_episode, self.total_steps = 0, 0
@@ -136,16 +136,16 @@ class D2RLTrainingEnv(core.Env):
             drl_epsilon_weight = self._get_drl_epsilon_weight(self.episode_data["weight_step_info"],
                                                               self.episode_data["drl_epsilon_step_info"],
                                                               self.episode_data["ndd_step_info"],
-                                                              self.episode_data["criticality_info"])
+                                                              self.episode_data["criticality_step_info"])
             clip_reward_threshold = self.yaml_conf["clip_reward_threshold"]
-            q_amplifier_reward = clip_reward_threshold - drl_epsilon_weight * 500 * clip_reward_threshold  # drl epsilon weight reward
+            q_amplifier_reward = clip_reward_threshold - drl_epsilon_weight * 30 * clip_reward_threshold  # drl epsilon weight reward
             if q_amplifier_reward < -clip_reward_threshold:
                 q_amplifier_reward = -clip_reward_threshold
             print("final_reward:", q_amplifier_reward)
 
             return q_amplifier_reward
 
-    def _get_drl_epsilon_weight(self, weight_info, epsilon_info, ndd_info, criticality_info):
+    def _get_drl_epsilon_weight(self, weight_info, epsilon_info, ndd_info, criticality_step_info):
         total_q_amplifier = 1
         for timestep in epsilon_info:
             if timestep in weight_info:
@@ -153,9 +153,9 @@ class D2RLTrainingEnv(core.Env):
                     total_q_amplifier = total_q_amplifier * (1 / (epsilon_info[timestep]))
                 elif weight_info[timestep] < 0.999:
                     ndd_tmp = ndd_info[timestep]
-                    criticality_tmp = criticality_info[timestep]
-                    # total_q_amplifier = total_q_amplifier * (ndd_tmp / (epsilon_info[timestep] * ndd_tmp + (1 - epsilon_info[timestep]) * criticality_tmp + ndd_tmp)) # * ndd_tmp
-                    total_q_amplifier = total_q_amplifier * (1 / (1 - epsilon_info[timestep])) * ndd_tmp
+                    criticality_tmp = criticality_step_info[timestep]
+                    total_q_amplifier = total_q_amplifier * (ndd_tmp / (epsilon_info[timestep] * ndd_tmp + (1 - epsilon_info[timestep]) * criticality_tmp)) # * ndd_tmp
+                    # total_q_amplifier = total_q_amplifier * (1 / (1 - epsilon_info[timestep])) * ndd_tmp
         print("mean epsilon:", np.mean([epsilon_info[timestep] for timestep in epsilon_info]))
         return total_q_amplifier
 

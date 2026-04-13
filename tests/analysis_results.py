@@ -28,12 +28,15 @@ def calculate_val(the_list):
 def analyze(path):
     crashes = []
     for file in os.listdir(path):
-        data = np.load(os.path.join(path, file), allow_pickle=True).tolist()
-        # print([data[i] for i in range(len(data)) if data[i] > 0])
-        if max(data) > 0.5:
-            print(max(data))
-        else:
-            crashes.extend(data)
+        try:
+            data = np.load(os.path.join(path, file), allow_pickle=True).tolist()
+            # print([data[i] for i in range(len(data)) if data[i] > 0])
+            if max(data) > 0.5:
+                print(max(data))
+            else:
+                crashes.extend(data)
+        except:
+            continue
     np.save("/home/linxuan/Embodied/go2_mujoco/results/nade_all.npy", np.array(crashes[:200000]))
     mean, rhf, var = calculate_val(crashes)
     print(f'Failure rate: {np.sum(crashes) / len(crashes)}')
@@ -41,5 +44,5 @@ def analyze(path):
     print(f'Total samples: {len(crashes)}, Num of crashes: {np.sum(np.array(crashes) > 0)}, Max weight: {np.max(crashes)}')
 
 if __name__ == '__main__':
-    root = 'results/nade'
+    root = 'results/d2rl'
     analyze(root)

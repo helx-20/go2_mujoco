@@ -1,25 +1,25 @@
-import sys, os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import time
-import gymnasium as gym
-import gym_testenvs
-from stable_baselines3 import DQN,PPO
-from stable_baselines3.common.evaluation import evaluate_policy
+#!/usr/bin/env python3
+"""
+NADE-style test for go2_mujoco: optionally use a criticality model to weight failures.
 
-import matplotlib.pyplot as plt
-import torch
-import argparse 
-
-from scipy.stats import norm
-from criticality.utils.criticality_model import SimpleClassifier
-# NOTE: original code used Reward_Model from Env_agent; we adapt by loading a SimpleClassifier
-
+If `--model_path` is provided, the script will attempt to load a PyTorch model
+that maps observations to a criticality score in [0,1]. The script multiplies
+failures by weights derived from that score to estimate a weighted failure count.
+"""
+import argparse
+import os, sys
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 import numpy as np
+import math
+import torch
+from scipy.stats import norm
 import json
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from deploy_mujoco.terrain_trainer import TerrainTrainer, TerrainGymEnv
+from criticality.utils.criticality_model import SimpleClassifier
+
 
 def convert_to_serializable(obj):
     if isinstance(obj, np.float32):
@@ -30,158 +30,159 @@ def convert_to_serializable(obj):
         return {key: convert_to_serializable(value) for key, value in obj.items()}
     else:
         return obj
-
-def generate_seed():
-    seed = os.getpid() + int(time.time() * 1e5 % 1e6)
-    return seed
-
-def main(args):
-    device = torch.device("cuda")
-    max_epoch = 100000
-    model = PPO.load("Rocket_agent_withwind/model/ppo_lunar.pkl.zip",device='cpu')
-
-    def build_wrapper_from_state(path, device=torch.device('cpu')):
-        if not path or not os.path.exists(path):
-            return None
-        state = torch.load(path, map_location=torch.device('cpu'))
-        input_dim = None
-        if isinstance(state, dict):
-            for key in state.keys():
-                if key.endswith('net.0.weight'):
-                    try:
-                        input_dim = state[key].shape[1]
-                        break
-                    except Exception:
-                        pass
-        if input_dim is None:
-            return None
-        model = SimpleClassifier(input_dim=input_dim, hidden=256)
-        try:
-            model.load_state_dict(state)
-        except Exception:
-            pass
-        model.eval().to(device)
-        return model
-
-    pre_model1 = build_wrapper_from_state(args.model_path, device=torch.device('cuda'))
-    if pre_model1 is None:
-        print(f'Warning: failed to build criticality model from {args.model_path}; proceeding without it')
     
-    WIND_POWER = 10.0
-    TURBULENCE_POWER = 1.0
-    env = gym.make('LunarLander/ordinary_nade-v0', gravity=-8.5, enable_wind=True, wind_power = WIND_POWER, turbulence_power = TURBULENCE_POWER, criticality_model1 = pre_model1, device=device, criticality_thresh=args.criticality_thresh, epsilon=args.epsilon, min_weight=args.min_weight)
 
-    start_epoch = 1
-    
-    bins_per_dim = getattr(args, 'bins_per_dim', 10)
-    D = 4
-    edges = np.linspace(-1.0, 1.0, bins_per_dim + 1)
-    grids = np.meshgrid(*[np.arange(bins_per_dim) for _ in range(D)], indexing='ij')
+def load_crit_model(path, device):
+    if path is None:
+        return None
+    model = SimpleClassifier(input_dim=56)
+    model.load_state_dict(torch.load(path, map_location='cpu'))
+    model.to(device)
+    return model
+
+
+def run(args):
+    go2_cfg = ("terrain", "go2.yaml")
+    terrain_cfg = "terrain_config.yaml"
+
+    trainer = TerrainTrainer(go2_cfg, terrain_cfg)
+    env = TerrainGymEnv(trainer, max_episode_steps=args.max_steps)
+
+    device = torch.device('cpu')
+    crit_model = load_crit_model(args.model_path, device) if getattr(args, 'model_path', None) else None
+    if crit_model is not None:
+        crit_model.eval()
+    else:
+        raise RuntimeError("Criticality model is required for NADE.")
+
+    n = args.episodes
+    weighted_failures = []
+    out_path = args.out
+    save_interval = args.save_interval
+
+    action_space = env.action_space
+
+    # prepare discretization edges for actions: 10 bins per dimension (match nde_test_go2.py)
+    action_edges = None
+    low = np.asarray(action_space.low, dtype=np.float32)
+    high = np.asarray(action_space.high, dtype=np.float32)
+    # avoid zero-range
+    high = np.where(high == low, low + 1.0, high)
+    action_edges = [np.linspace(low[d], high[d], num=11) for d in range(low.shape[0])]
+
+    D = int(action_space.shape[0])
+    grids = np.meshgrid(*[np.arange(10) for _ in range(D)], indexing='ij')
     bins_flat = np.stack([g.reshape(-1) for g in grids], axis=1).astype(np.int64)
     num_actions = bins_flat.shape[0]
     centers = np.zeros((num_actions, D), dtype=np.float32)
     for d in range(D):
+        e = action_edges[d]
         b_idx = bins_flat[:, d]
-        centers[:, d] = 0.5 * (edges[b_idx] + edges[b_idx + 1])
+        centers[:, d] = 0.5 * (e[b_idx] + e[b_idx + 1])
+    candidates_arr = centers
 
-    for epoch in range(start_epoch, max_epoch):  
-        obs,_= env.reset()
+    for i in range(n):
+        obs, _ = env.reset()
         done = False
-        
-        episode_data = {}
-        
+        total_weight = 1.0
+        steps = 0
+
         weight_step_info = {}
         drl_epsilon_step_info = {}
         ndd_step_info = {}
         drl_obs_step_info = {}
-        
-        weight = 1
-        control_step = 0
-        i = 0
-        steps = 0
+        criticality_step_info = {}
+
         while not done:
-            action, _ = model.predict(obs, deterministic=True)
-            # ensure action is numpy array of length >=4
-            try:
-                if hasattr(action, 'cpu'):
-                    action = action.cpu().numpy()
-            except Exception:
-                pass
-            action = np.asarray(action, dtype=np.float32).reshape(-1)
+            # Evaluate crit_model in batch: try obs+action first, fallback to obs-only
+            with torch.no_grad():
+                t_obs = torch.from_numpy(obs.astype(np.float32)).to(device).unsqueeze(0).repeat(candidates_arr.shape[0], 1)
+                t_act = torch.from_numpy(np.asarray(candidates_arr, dtype=np.float32)).to(device)
+                t_in = torch.cat([t_obs, t_act], dim=1)
+                outputs = crit_model(t_in)
+            scores = torch.nn.functional.softmax(outputs, dim=1)[:, 1].squeeze().cpu().numpy()
 
-            # evaluate criticality model on obs+action candidates
-            if pre_model1 is None:
-                p_list = np.ones(num_actions, dtype=float) / float(num_actions)
-                pdf_array = p_list
-                action_idx = int(np.argmin(np.linalg.norm(centers - (action[:D].reshape(1, -1)), axis=1)))
-                cur_weight = 1.0
+            # construct criticality distribution
+            if args.criticality_thresh is not None:
+                criticality = (scores > args.criticality_thresh).astype(float)
             else:
-                with torch.no_grad():
-                    t_obs = torch.from_numpy(np.asarray(obs, dtype=np.float32)).to(device).unsqueeze(0).repeat(num_actions, 1)
-                    t_act = torch.from_numpy(centers).to(device)
-                    t_in = torch.cat([t_obs, t_act], dim=1)
-                    out = pre_model1(t_in)
-                    if isinstance(out, torch.Tensor) and out.dim() == 2 and out.size(1) == 2:
-                        scores = torch.softmax(out, dim=1)[:, 1].cpu().numpy()
-                    else:
-                        scores = out.view(-1).cpu().numpy()
-                # construct mixture pdf
-                p_list = np.ones_like(scores, dtype=float)
-                p_list = p_list / p_list.sum()
-                criticality = scores if args.criticality_thresh is None else (scores > args.criticality_thresh).astype(float)
-                if np.max(criticality) > 3e-1 or np.sum(criticality) > 60:
-                    criticality = criticality / (criticality.sum() + 1e-12)
-                    pdf_array = (1.0 - args.epsilon) * criticality + args.epsilon * p_list
-                else:
-                    pdf_array = p_list
-                pdf_array = pdf_array / pdf_array.sum()
-                # find index of nearest center to the action taken
-                action_idx = int(np.argmin(np.linalg.norm(centers - (action[:D].reshape(1, -1)), axis=1)))
-                cur_weight = float(p_list[action_idx] / (pdf_array[action_idx]))
-
-            # apply fallback similar to original: if weight too small or too large, use uniform
-            if weight * cur_weight < args.min_weight or cur_weight > 1.1:
+                criticality = scores
+            p_list = np.ones_like(criticality, dtype=float)
+            p_list = p_list / p_list.sum()
+            if np.max(criticality) > args.criticality_max_thresh: # or np.sum(criticality) > 200 * args.criticality_max_thresh:
+                criticality = criticality / criticality.sum()
+                pdf_array = (1.0 - args.epsilon) * criticality + args.epsilon * p_list
+            else:
                 pdf_array = p_list
-                action_idx = int(np.random.choice(len(pdf_array), p=pdf_array))
-                cur_weight = 1.0
 
-            obs_after, reward, terminated, truncated, info = env.step(action)
-            steps += 1
+            pdf_array = pdf_array / pdf_array.sum()  # ensure normalized
+            idx = int(np.random.choice(len(pdf_array), p=pdf_array))
+            action = np.asarray(candidates_arr[idx], dtype=np.float32)
+            weight = p_list[idx] / pdf_array[idx]
+            # if weight > 0. and abs(weight - 1) > 1e-5:
+            #     idx = int(np.argmax(pdf_array))
+            #     action = np.asarray(candidates_arr[idx], dtype=np.float32)
+            #     weight = p_list[idx] / pdf_array[idx]
+
+            if total_weight * weight < args.min_weight:
+                pdf_array = p_list  # fallback to uniform if weight too small
+                idx = int(np.random.choice(len(pdf_array), p=pdf_array))
+                action = np.asarray(candidates_arr[idx], dtype=np.float32)
+                weight = 1.0
+            total_weight *= weight
+
+            if abs(weight - 1.0) > 1e-5:
+                weight_step_info[str(steps)] = float(weight)
+                drl_epsilon_step_info[str(steps)] = args.epsilon
+                ndd_step_info[str(steps)] = float(p_list[idx])
+                drl_obs_step_info[str(steps)] = np.asarray(obs, dtype=np.float32).tolist()
+                criticality_step_info[str(steps)] = float(criticality[idx])
+
+            next_obs, reward, terminated, truncated, info = env.step(action)
+            obs = next_obs
             done = bool(terminated) or bool(truncated) or bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
-            crash = bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
-            obs_input = np.asarray(obs, dtype=np.float32).tolist()
-            weight *= cur_weight
 
-            if abs(cur_weight - 1) < 1e-5:
-                pass
-            else: 
-                control_step += 1
-                weight_step_info[f'{i}'] = cur_weight
-                drl_epsilon_step_info[f'{i}'] = action[:D].tolist()
-                ndd_step_info[f'{i}'] = float(p_list[action_idx])
-                drl_obs_step_info[f'{i}'] = obs_input
-    
-            if done:
-                if crash:
-                    episode_data['weight_step_info '] = weight_step_info 
-                    episode_data['drl_epsilon_step_info'] = drl_epsilon_step_info 
-                    episode_data['ndd_step_info'] = ndd_step_info 
-                    episode_data['drl_obs_step_info'] = drl_obs_step_info
-                    episode_data['weight_episode'] = float(weight)
-                    
-                    file_name = f'/mnt/mnt1/linxuan/MyLander_data/d2rl_data/raw_data/crash_{args.batch_idx}_{epoch}.json'
-                    with open(file_name,'w') as f:
-                        json.dump(convert_to_serializable(episode_data),f)
-            i+=1
-  
-    env.close()
-  
+            steps += 1
+
+        # episode finished; determine crash/failure from last step's info
+        crash = int(bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False)))
+        weighted_failures.append(crash * total_weight)
+        print(f"episode {i+1}/{n} steps={steps} crash={crash>0} weight={total_weight:.6f}")
+
+        if crash and weight_step_info:
+            episode_data = {
+                'weight_step_info': weight_step_info,
+                'drl_epsilon_step_info': drl_epsilon_step_info,
+                'ndd_step_info': ndd_step_info,
+                'drl_obs_step_info': drl_obs_step_info,
+                'criticality_step_info': criticality_step_info,
+                'weight_episode': float(total_weight),
+            }
+            out_dir = args.out
+            file_name = os.path.join(out_dir, f'd2rl_{args.worker_id}_{i}.json')
+            with open(file_name,'w') as f:
+                json.dump(convert_to_serializable(episode_data),f)
+        
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch_idx', type=int, default=4)
-    parser.add_argument('--model_path', type=str, default='', help='Path to criticality model state_dict')
-    parser.add_argument('--criticality_thresh', type=float, default=None)
-    parser.add_argument('--epsilon', type=float, default=0.01)
-    parser.add_argument('--min_weight', type=float, default=1e-3)
+    parser.add_argument('--worker_id', type=int, default=0)
+    parser.add_argument('--episodes', type=int, default=500)
+    parser.add_argument('--max_steps', type=int, default=40)
+    parser.add_argument('--log_interval', type=int, default=10)
+    # parser.add_argument('--model_path', type=str, default='criticality/stage1/model/stage1_criticality_best_new_1.pt', help='Optional criticality model')
+    parser.add_argument('--model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Optional criticality model')
+    # parser.add_argument('--model_path', type=str, default='criticality/stage2/model/stage2_new_1_epoch5950.pt', help='Optional criticality model')
+    parser.add_argument('--out', type=str, default='data/d2rl/', help='Path to save weighted failures numpy array')
+    parser.add_argument('--criticality_out', type=str, default=None, help='Optional path to save criticality dataset (obs, actions, labels)')
+    parser.add_argument('--save_interval', type=int, default=10, help='Save results every N episodes at log interval')
+    parser.add_argument('--epsilon', type=float, default=0.01, help='epsilon mixing weight for criticality/pdf')
+    parser.add_argument('--criticality_thresh', type=float, default=None, help='threshold to binarize criticality scores')
+    parser.add_argument('--criticality_max_thresh', type=float, default=3e-1, help='threshold to determine if crit scores are meaningful for weighting')
+    parser.add_argument('--min_weight', type=float, default=1e-3, help='minimum weight to apply to failures')
     args = parser.parse_args()
-    main(args)
+    print('args:', args)
+    # ensure output directory exists
+    if args.out:
+        os.makedirs(args.out, exist_ok=True)
+    run(args)
