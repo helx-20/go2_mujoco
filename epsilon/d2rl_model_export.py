@@ -24,7 +24,7 @@ register_env("my_env", env_creator)
 ray.init(local_mode=True, include_dashboard=False, ignore_reinit_error=True)
 algo = PPO(config={"env": "my_env", "env_config": yaml_conf})
 
-checkpoint_path = "/home/linxuan/ray_results/training_results/PPO_my_env_b851e_00000_0_2026-04-13_12-17-44/checkpoint_000999"  # replace with your checkpoint path
+checkpoint_path = "/home/linxuan/ray_results/training_results/PPO_my_env_b4b0e_00000_0_2026-04-13_22-47-33/checkpoint_000999"  # replace with your checkpoint path
 algo.restore(checkpoint_path)
 
 # Try to get the policy and export the model. Newer RLlib policies may provide

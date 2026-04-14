@@ -138,7 +138,7 @@ class D2RLTrainingEnv(core.Env):
                                                               self.episode_data["ndd_step_info"],
                                                               self.episode_data["criticality_step_info"])
             clip_reward_threshold = self.yaml_conf["clip_reward_threshold"]
-            q_amplifier_reward = clip_reward_threshold - drl_epsilon_weight * 30 * clip_reward_threshold  # drl epsilon weight reward
+            q_amplifier_reward = clip_reward_threshold - drl_epsilon_weight * 10000 * clip_reward_threshold  # drl epsilon weight reward
             if q_amplifier_reward < -clip_reward_threshold:
                 q_amplifier_reward = -clip_reward_threshold
             print("final_reward:", q_amplifier_reward)
@@ -154,8 +154,8 @@ class D2RLTrainingEnv(core.Env):
                 elif weight_info[timestep] < 0.999:
                     ndd_tmp = ndd_info[timestep]
                     criticality_tmp = criticality_step_info[timestep]
-                    total_q_amplifier = total_q_amplifier * (ndd_tmp / (epsilon_info[timestep] * ndd_tmp + (1 - epsilon_info[timestep]) * criticality_tmp)) # * ndd_tmp
-                    # total_q_amplifier = total_q_amplifier * (1 / (1 - epsilon_info[timestep])) * ndd_tmp
+                    # total_q_amplifier = total_q_amplifier * (ndd_tmp / (epsilon_info[timestep] * ndd_tmp + (1 - epsilon_info[timestep]) * criticality_tmp)) # * ndd_tmp
+                    total_q_amplifier = total_q_amplifier * (1 / (1 - epsilon_info[timestep])) * ndd_tmp
         print("mean epsilon:", np.mean([epsilon_info[timestep] for timestep in epsilon_info]))
         return total_q_amplifier
 
