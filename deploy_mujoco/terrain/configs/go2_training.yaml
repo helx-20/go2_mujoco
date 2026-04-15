@@ -7,7 +7,7 @@
 # - cmd_scale: 对应`[lin_vel_x_scale, lin_vel_y_scale, ang_vel_scale]`因此缺省为`[1,1,1]`
 ## delete this later
 
-policy_path: "pre_train/go2/terrain_2.pt"
+policy_path: "training/model/go2_controller_new.pt"
 xml_path: "deploy_mujoco/robots/go2/scene_terrain.xml"
 
 # Total simulation time
