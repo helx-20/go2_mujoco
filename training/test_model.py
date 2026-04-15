@@ -55,7 +55,7 @@ def run(args):
         sb3 = PPO.load(controller_path, device='cpu')
 
         # read num_obs from the go2 config YAML if possible
-        cfg_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../deploy_mujoco/terrain", go2_cfg[1])
+        cfg_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../deploy_mujoco/terrain/configs", go2_cfg[1])
         with open(cfg_path, 'r', encoding='utf-8') as f:
             cfg = yaml.safe_load(f)
             num_obs = int(cfg.get('num_obs', 48))
@@ -209,9 +209,9 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--controller_path', type=str, default='training/model/actor_init.zip')
+    parser.add_argument('--controller_path', type=str, default='training/model/run_ppo.zip')
     parser.add_argument('--worker_id', type=int, default=0)
-    parser.add_argument('--episodes', type=int, default=2000)
+    parser.add_argument('--episodes', type=int, default=500)
     parser.add_argument('--max_steps', type=int, default=40)
     parser.add_argument('--log_interval', type=int, default=10)
     parser.add_argument('--out', type=str, default='training/results', help='Path to save crashes numpy array')

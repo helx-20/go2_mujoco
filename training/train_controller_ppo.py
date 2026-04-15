@@ -9,6 +9,7 @@ controller actions (num_actions) and saves the trained model.
 import os
 import sys
 import argparse
+import torch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -67,27 +68,84 @@ def main():
     else:
         vec_env = SubprocVecEnv(env_fns)
 
-    model = PPO('MlpPolicy', vec_env, verbose=1, device=args.rl_device, seed=args.seed)
+    # If a pretrained SB3 .zip is provided, load it directly with the created env
+    model = None
+    if args.pretrain and os.path.isfile(args.pretrain) and args.pretrain.endswith('.zip'):
+        try:
+            from stable_baselines3 import PPO as SB3PPO
+            print('Loading SB3 pretrained model directly from', args.pretrain)
+            model = SB3PPO.load(args.pretrain, env=vec_env, device=args.rl_device)
+            print('Loaded SB3 model and attached env — continuing training from pretrain .zip')
+        except Exception as e:
+            print('Failed to load SB3 .zip as model; falling back to fresh model. Error:', e)
 
-    # If a pretrained controller is provided, attempt to load its weights into the SB3 policy
-    if args.pretrain and os.path.isfile(args.pretrain):
-        from stable_baselines3 import PPO as SB3PPO
-        sb3_model = SB3PPO.load(args.pretrain, device='cpu')
-        src_sd = sb3_model.policy.state_dict()
+    # Otherwise create a fresh model and try to copy compatible weights if available
+    if model is None:
+        hidden_sizes = [512, 256, 128]
+        policy_kwargs = {'net_arch': dict(pi=hidden_sizes, vf=hidden_sizes), 'activation_fn': torch.nn.ELU}
+        model = PPO('MlpPolicy', vec_env, verbose=1, device=args.rl_device, seed=args.seed, policy_kwargs=policy_kwargs)
 
-        # copy matching tensors into the current SB3 policy
-        policy_sd = model.policy.state_dict()
-        matched = 0
-        for k, v in src_sd.items():
-            if k in policy_sd and tuple(policy_sd[k].shape) == tuple(v.shape):
-                try:
-                    policy_sd[k].copy_(v)
-                    matched += 1
-                except Exception:
-                    pass
+        if args.pretrain and os.path.isfile(args.pretrain):
+            try:
+                from stable_baselines3 import PPO as SB3PPO
+                sb3_model = SB3PPO.load(args.pretrain, device='cpu')
 
-        model.policy.load_state_dict(policy_sd)
-        print(f'Initialized policy from {args.pretrain} — matched {matched} tensors')
+                # Source and destination state dicts
+                src_sd = sb3_model.policy.state_dict()
+                policy_sd = model.policy.state_dict()
+
+                matched = {}
+                used_src = set()
+
+                # 1) Exact name + shape matches
+                for src_k, src_v in src_sd.items():
+                    if src_k in policy_sd and tuple(policy_sd[src_k].shape) == tuple(src_v.shape):
+                        try:
+                            policy_sd[src_k].copy_(src_v)
+                            matched[src_k] = src_k
+                            used_src.add(src_k)
+                        except Exception:
+                            pass
+
+                # 2) Suffix (last token) + shape matches for remaining dst keys
+                for dst_k in list(policy_sd.keys()):
+                    if dst_k in matched:
+                        continue
+                    dst_shape = tuple(policy_sd[dst_k].shape)
+                    dst_suffix = dst_k.split('.')[-1]
+                    for src_k, src_v in src_sd.items():
+                        if src_k in used_src:
+                            continue
+                        if src_k.split('.')[-1] == dst_suffix and tuple(src_v.shape) == dst_shape:
+                            try:
+                                policy_sd[dst_k].copy_(src_v)
+                                matched[dst_k] = src_k
+                                used_src.add(src_k)
+                                break
+                            except Exception:
+                                continue
+
+                # 3) Shape-only matching for any remaining dst keys (first-fit)
+                for dst_k in list(policy_sd.keys()):
+                    if dst_k in matched:
+                        continue
+                    dst_shape = tuple(policy_sd[dst_k].shape)
+                    for src_k, src_v in src_sd.items():
+                        if src_k in used_src:
+                            continue
+                        if tuple(src_v.shape) == dst_shape:
+                            try:
+                                policy_sd[dst_k].copy_(src_v)
+                                matched[dst_k] = src_k
+                                used_src.add(src_k)
+                                break
+                            except Exception:
+                                continue
+
+                model.policy.load_state_dict(policy_sd)
+                print(f'Initialized policy from {args.pretrain} — matched {len(matched)} tensors')
+            except Exception as e:
+                print('Pretrain load attempt failed:', e)
 
     model.learn(total_timesteps=int(args.total_timesteps))
 
