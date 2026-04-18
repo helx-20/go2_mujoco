@@ -67,7 +67,7 @@ class TrainEnv(gym.Env):
         self.total_sim_steps = int(self.terrain_decimation * self.control_decimation)
         # adjust reward scales to account for internal terrain sampling frequency (divide non-success/collision rewards by terrain_decimation)
         for k in list(self.trainer.reward_scales.keys()):
-            if k not in ['success', 'collision', 'stuck']:
+            if k not in ['success', 'failed']:
                 self.trainer.reward_scales[k] = float(self.trainer.reward_scales[k]) / self.terrain_decimation
         # internal counters and current terrain action
         self._sim_since_terrain = self.total_sim_steps

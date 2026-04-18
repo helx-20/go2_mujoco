@@ -54,7 +54,7 @@ class GO2TerrainCfg( LeggedRobotCfg ):
         class scales( LeggedRobotCfg.rewards.scales ):
             torques = -0.0002 # -0.0002
             dof_pos_limits = -1.0 # -10.0
-            success = 10.0
+            success = 1.0
             # termination = -1000 # -1000 # -5000 # -0.5
             # lin_vel_z = 0.0
             # tracking_lin_vel = 0.0 # 暂时加的
@@ -71,8 +71,7 @@ class GO2TerrainCfg( LeggedRobotCfg ):
             # dof_acc = 0 #-2.5e-7
             # base_height = -0. 
             # feet_air_time =  0 #1.0
-            collision = -10.
-            stuck = -10.
+            failed = -1.
             # feet_stumble = -0.0 
             # action_rate = 0 #-0.01
             # stand_still = -0.

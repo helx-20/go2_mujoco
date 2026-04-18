@@ -145,7 +145,7 @@ class TestEnv:
         terrain_dec = int(self.terrain_decimation) if hasattr(self, 'terrain_decimation') else 1
         dt_scale = sim_dt * float(ctrl_dec) * float(terrain_dec)
         for k in list(self.reward_scales.keys()):
-            if k not in ['success', 'collision', 'stuck']:
+            if k not in ['success', 'failed']:
                 self.reward_scales[k] = float(self.reward_scales[k]) * dt_scale
 
     def reset(self):
@@ -593,12 +593,17 @@ class TestEnv:
         # analyze contacts
         collided, base_collision, thigh_collision = self._analyze_contacts()
 
-        # fallen / out_of_terrain_edge
+        # fallen
         fallen = self._is_fallen(base_z, roll, pitch)
+
+        # out_of_terrain_edge
         out_of_terrain_edge = self._is_out_of_terrain_edge()
 
         # stuck
         stuck = self._compute_stuck(lin_vel, target_speed)
+
+        # failed
+        failed = collided or base_collision or thigh_collision or fallen or stuck
 
         # termination decision (use existing compute_done)
         done = self._compute_done(fallen, base_collision, out_of_terrain_edge, stuck)
@@ -659,12 +664,12 @@ class TestEnv:
                 comp_rewards['dof_pos_limits'] = val
 
             # collision penalty
-            if 'collision' in self.reward_scales and collided:
-                val = float(self.reward_scales.get('collision', 0.0))
+            if 'failed' in self.reward_scales and failed:
+                val = float(self.reward_scales.get('failed', 0.0))
                 reward += val
-                comp_rewards['collision'] = val
+                comp_rewards['failed'] = val
             else:
-                comp_rewards.setdefault('collision', 0.0)
+                comp_rewards.setdefault('failed', 0.0)
 
             # stuck penalty/reward (use computed stuck from terrain logic)
             stuck = self._compute_stuck(lin_vel, target_speed)
