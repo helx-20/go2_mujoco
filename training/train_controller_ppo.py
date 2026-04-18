@@ -23,7 +23,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.buffers import RolloutBuffer
-from training.controller_env import ControllerEnv
+from training.utils.train_env import TrainEnv
 from training.utils.test_env import TestEnv, TerrainGymEnv
 
 # Silence Gym -> Gymnasium migration warning and noisy gym/gymnasium loggers
@@ -33,14 +33,25 @@ warnings.filterwarnings("ignore", message=".*Please upgrade to Gymnasium.*", cat
 logging.getLogger("gym").setLevel(logging.ERROR)
 logging.getLogger("gymnasium").setLevel(logging.ERROR)
 
+class DummyPolicy(torch.nn.Module):
+    def __init__(self, num_actions=12):
+        super().__init__()
+        self.num_actions = num_actions
+        self.action_policy_prev = torch.zeros(self.num_actions, dtype=torch.float32)
 
-def make_env_fn(warmup_policy, max_episode_steps, idx, render_mode=False):
+    def forward(self, x):
+        return torch.zeros((x.shape[0], self.num_actions), dtype=torch.float32)
+
+def make_env_fn(max_episode_steps):
     def _thunk():
-        env = ControllerEnv(warmup_policy=warmup_policy, config_file_path="go2_training.yaml", max_episode_steps=max_episode_steps, render_mode=render_mode)
-        env = Monitor(env)
-        return env
-    return _thunk
+        # Create a lightweight dummy policy to satisfy TestEnv/Go2Controller
+        config_file_path = "go2_training.yaml"
+        terrain_cfg = "terrain_config.yaml"
+        trainer = TestEnv(policy=DummyPolicy(), config_file_path=config_file_path, terrain_config_file=terrain_cfg)
+        env = TrainEnv(trainer=trainer, max_episode_steps=max_episode_steps)
+        return Monitor(env)
 
+    return _thunk
 
 def main():
     parser = argparse.ArgumentParser()
@@ -52,7 +63,7 @@ def main():
     parser.add_argument('--max_steps', type=int, default=21)
     parser.add_argument('--log_interval', type=int, default=20000, help='Timesteps between simple stdout progress prints')
     parser.add_argument('--eval_freq', type=int, default=20000, help='Timesteps between evaluations')
-    parser.add_argument('--n_eval_episodes', type=int, default=10, help='Number of episodes per evaluation')
+    parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
     parser.add_argument('--tensorboard_log', type=str, default='training/logs', help='TensorBoard log dir')
     parser.add_argument('--out', type=str, default='training/model')
     parser.add_argument('--run_name', type=str, default='run')
@@ -88,9 +99,9 @@ def main():
         
     # create vec env
     # create envs with rendering disabled by default
-    wrapper = PolicyOnlyWrapper(sb3_pretrain_model.policy.mlp_extractor.policy_net.to('cpu').eval(), sb3_pretrain_model.policy.action_net.to('cpu').eval()).cpu()
+    # wrapper = PolicyOnlyWrapper(sb3_pretrain_model.policy.mlp_extractor.policy_net.to('cpu').eval(), sb3_pretrain_model.policy.action_net.to('cpu').eval()).cpu()
     
-    env_fns = [make_env_fn(wrapper, args.max_steps, i, render_mode=False) for i in range(args.num_envs)]
+    env_fns = [make_env_fn(args.max_steps) for _ in range(args.num_envs)]
     if args.num_envs == 1:
         vec_env = DummyVecEnv(env_fns)
     else:
@@ -224,7 +235,6 @@ def main():
             # per-episode accumulators
             ep_steps = 0
             ep_total_reward = 0.0
-            ep_components = {'torques': 0.0, 'dof_pos_limits': 0.0, 'success': 0.0}
 
             while not done:
                 ep_steps += 1
@@ -238,51 +248,25 @@ def main():
                 action = centers
                 action = np.asarray(action, dtype=np.float32)
 
-                next_obs, _, terminated, truncated, info = env.step(action)
+                next_obs, reward, terminated, truncated, info = env.step(action)
                 obs = next_obs
 
-                # collect structured rewards if provided by env
-                info_rewards = {}
-                if isinstance(info, dict):
-                    # some envs provide a 'rewards' dict inside info
-                    info_rewards = info.get('rewards', {}) if isinstance(info.get('rewards', {}), dict) else {}
-
-                # helper to safely extract scalar from info or info_rewards
-                def _get(k, default=0.0):
-                    if k in info_rewards:
-                        try:
-                            return float(info_rewards.get(k, default))
-                        except Exception:
-                            return default
-
-                torques_val = _get('torques', 0.0)
-                dof_pos_limits_val = _get('dof_pos_limits', 0.0)
-                success_val = info.get('success', 0.0) * 10
-
-                ep_components['torques'] += torques_val
-                ep_components['dof_pos_limits'] += dof_pos_limits_val
-                ep_components['success'] += success_val
-
-                # Prefer structured sum
-                sum_info = sum([float(v) for v in info_rewards.values()]) if len(info_rewards) > 0 else 0.0
-                sum_info += success_val
-                ep_total_reward += sum_info
+                ep_total_reward += reward
 
                 done = bool(terminated) or bool(truncated) or bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
 
             # episode finished; determine crash/failure from last step's info
             crash = int(bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False)))
-            crash_type = 'fallen' if info.get('fallen', False) else 'collided' if info.get('collided', False) else 'base_collision' if info.get('base_collision', False) else 'thigh_collision' if info.get('thigh_collision', False) else 'stuck' if info.get('stuck', False) else 'none'
+            crash_type = 'fallen' if info.get('fallen', False) else 'collided' if info.get('collided', False) else 'base_collision' if info.get('base_collision', False) else 'thigh_collision' if info.get('thigh_collision', False) else 'stuck' if info.get('stuck', False) else 'safe'
 
             # print per-episode breakdown and total
             print(f"episode {i+1}/{n_episodes} steps={ep_steps} crash={crash}, type={crash_type}")
-            print(f"  reward_components: torques={ep_components['torques']:.6f}, dof_pos_limits={ep_components['dof_pos_limits']:.6f}, success={ep_components['success']:.6f}")
             print(f"  total_reward (accumulated) = {ep_total_reward:.6f}")
             results.append(ep_total_reward)
 
         return results
 
-    # _ = evaluate_policy(model.policy, n_episodes=int(args.n_eval_episodes))
+    _ = evaluate_policy(model.policy, n_episodes=2)
 
     class PolicyNetEvalCallback(BaseCallback):
         """Eval callback that runs episodes using `evaluate_policy(policy, ...)`.

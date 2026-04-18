@@ -128,56 +128,25 @@ class TestEnv:
         self.reward_scales = {}
         self.only_positive_rewards = False
         self.tracking_sigma = 0.1
-        try:
-            sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "../../training/utils/legged_gym"))
-            try:
-                from training.utils.go2_terrain_config import GO2TerrainCfg
-            except Exception:
-                # provide minimal stub similar to ControllerEnv fallback
-                import types
-                lr_mod = types.ModuleType('legged_gym.envs.base.legged_robot_config')
-                class LeggedRobotCfg:
-                    class init_state: pass
-                    class control: pass
-                    class asset: pass
-                    class rewards:
-                        class scales: pass
-                    class terrain: pass
-                class LeggedRobotCfgPPO:
-                    class algorithm: pass
-                    class runner: pass
-                lr_mod.LeggedRobotCfg = LeggedRobotCfg
-                lr_mod.LeggedRobotCfgPPO = LeggedRobotCfgPPO
-                sys.modules['legged_gym'] = types.ModuleType('legged_gym')
-                sys.modules['legged_gym.envs'] = types.ModuleType('legged_gym.envs')
-                sys.modules['legged_gym.envs.base'] = types.ModuleType('legged_gym.envs.base')
-                sys.modules['legged_gym.envs.base.legged_robot_config'] = lr_mod
-                from training.utils.go2_terrain_config import GO2TerrainCfg
 
-            rcfg = GO2TerrainCfg()
-            self.rcfg = rcfg
-            try:
-                scales_obj = getattr(rcfg, 'rewards').scales
-                self.reward_scales = {k: getattr(scales_obj, k) for k in dir(scales_obj) if not k.startswith('__')}
-            except Exception:
-                self.reward_scales = {}
-            self.only_positive_rewards = getattr(rcfg.rewards, 'only_positive_rewards', False)
-            self.tracking_sigma = getattr(rcfg.rewards, 'tracking_sigma', 0.1)
-        except Exception:
-            self.reward_scales = {}
+        from training.utils.go2_terrain_config import GO2TerrainCfg
+
+        rcfg = GO2TerrainCfg()
+        self.rcfg = rcfg
+        scales_obj = getattr(rcfg, 'rewards').scales
+        self.reward_scales = {k: getattr(scales_obj, k) for k in dir(scales_obj) if not k.startswith('__')}
+
+        self.only_positive_rewards = getattr(rcfg.rewards, 'only_positive_rewards', False)
+        self.tracking_sigma = getattr(rcfg.rewards, 'tracking_sigma', 0.1)
+
         # scale reward_scales to trainer timestep units to match ControllerEnv semantics
-        try:
-            sim_dt = float(self.model.opt.timestep)
-            ctrl_dec = int(self.control_decimation) if hasattr(self, 'control_decimation') else 1
-            terrain_dec = int(self.terrain_decimation) if hasattr(self, 'terrain_decimation') and self.terrain_decimation is not None else 1
-            dt_scale = sim_dt * float(ctrl_dec) * max(1, int(terrain_dec))
-            for k in list(self.reward_scales.keys()):
-                try:
-                    self.reward_scales[k] = float(self.reward_scales[k]) * dt_scale
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        sim_dt = float(self.model.opt.timestep)
+        ctrl_dec = int(self.control_decimation) if hasattr(self, 'control_decimation') else 1
+        terrain_dec = int(self.terrain_decimation) if hasattr(self, 'terrain_decimation') and self.terrain_decimation is not None else 1
+        dt_scale = sim_dt * float(ctrl_dec) * max(1, int(terrain_dec))
+        for k in list(self.reward_scales.keys()):
+            if k not in ['success', 'collision', 'stuck']:
+                self.reward_scales[k] = float(self.reward_scales[k]) * dt_scale
 
     def reset(self):
         """Reset physics and counters. Returns initial observation (robot-centric).
@@ -334,15 +303,15 @@ class TestEnv:
                     time.sleep(time_until_next_step)
 
         # compute terrain reward and next obs
-        terrain_reward, terrain_info, done = self.compute_terrain_reward()
+        total_reward, reward_info, done = self.compute_reward()
 
         # Update last action before reading next observation so obs can include current terrain action.
         self.terrain_changer.last_action = np.asarray(terrain_action, dtype=np.float32)
         next_terrain_obs = self.get_terrain_observation()
 
         info = {
-            'terrain_reward': float(terrain_reward),
-            **terrain_info,
+            'total_reward': float(total_reward),
+            **reward_info,
         }
         if self.trace_enabled:
             info['go2_rollout_trace'] = {
@@ -353,10 +322,10 @@ class TestEnv:
 
         # print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
         # if terrain_reward != 0.0:
-        if terrain_reward >= 1.0:
-            print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}, info: {terrain_info}")
+        if total_reward >= 1.0:
+            print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, total_reward: {total_reward}, info: {info}")
 
-        return next_terrain_obs, np.asarray(terrain_action, dtype=np.float32), float(terrain_reward), done, info
+        return next_terrain_obs, np.asarray(terrain_action, dtype=np.float32), float(total_reward), done, info
 
     def step_only_robot(self, terrain_decimation=1):
         target_dof_pos = self.go2_controller.default_angles.copy()
@@ -389,23 +358,23 @@ class TestEnv:
                     time.sleep(time_until_next_step)
 
         # compute terrain reward and next obs
-        terrain_reward, terrain_info, done = self.compute_terrain_reward()
+        total_reward, reward_info, done = self.compute_reward()
 
         # Update last action before reading next observation so obs can include current terrain action.
         # self.terrain_changer.last_action = np.asarray(terrain_action, dtype=np.float32)
         next_terrain_obs = self.get_terrain_observation()
 
         info = {
-            'terrain_reward': float(terrain_reward),
-            **terrain_info,
+            'total_reward': float(total_reward),
+            **reward_info,
         }
 
         # print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}")
         # if terrain_reward != 0.0:
-        if terrain_reward >= 1.0:
-            print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, terrain_reward: {terrain_reward}, info: {terrain_info}")
+        if total_reward >= 1.0:
+            print(f"step_counter: {self.step_counter}, robot_counter: {self.robot_counter}, total_reward: {total_reward}, info: {info}")
 
-        return next_terrain_obs, None, float(terrain_reward), done, info
+        return next_terrain_obs, None, float(total_reward), done, info
 
     # TODO 梅花桩相关
     def set_robot_spawn_pose(self, x=0.0, y=0.0, z=None, yaw=0.0):
@@ -617,7 +586,7 @@ class TestEnv:
 
         return False
 
-    def compute_terrain_reward(self) -> Tuple[float, dict, bool]:
+    def compute_reward(self) -> Tuple[float, dict, bool]:
         # Compute reward using controller-style reward scales when available.
         base_z, lin_vel, roll, pitch, target_speed = self._collect_motion_state()
 
@@ -795,8 +764,11 @@ class TerrainGymEnv(gym.Env):
         # give an episodic success reward if configured in terrain_config and mark info['success']=True.
         if terminated and (not truncated):
             info['success'] = True
+            success_reward = self.trainer.reward_scales.get('success', 0.0)
         else:
             info['success'] = False
+            success_reward = 0.0
+        reward = float(reward) + float(success_reward)
 
         # Always return the 5-tuple (obs, reward, terminated, truncated, info)
         return next_obs, float(reward), bool(terminated), bool(truncated), info
