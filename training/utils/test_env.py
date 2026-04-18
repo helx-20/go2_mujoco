@@ -537,14 +537,6 @@ class TestEnv:
         angle_thresh = float(self.terrain_config["event_and_reward"]["fall_angle_threshold"])
         return abs(roll) > angle_thresh or abs(pitch) > angle_thresh
 
-    def _compute_fall_reward(self, fallen: bool, repeat: bool) -> float:
-        if not fallen:
-            return 0.0
-        if repeat or not self._fallen_reported:
-            self._fallen_reported = True
-            return float(self.terrain_config["event_and_reward"]["fall_reward"])
-        return 0.0
-
     def _analyze_contacts(self) -> Tuple[bool, bool, bool]:
         if not (
             self._is_failure_enabled("collided")
@@ -585,33 +577,13 @@ class TestEnv:
 
         return collided, base_collision, thigh_collision
 
-    def _compute_collision_reward(self, collided: bool, base_collision: bool, thigh_collision: bool, repeat: bool) -> float:
-        reward = 0.0
-        if base_collision and (repeat or not self._collision_reported):
-            reward += float(self.terrain_config["event_and_reward"]["base_collision_reward"])
-            self._collision_reported = True
-        if thigh_collision:
-            reward += float(self.terrain_config["event_and_reward"]["thigh_collision_reward"])
-        if collided:
-            reward += float(self.terrain_config["event_and_reward"]["collision_reward"])
-        return reward
-
-    def _compute_tilt_reward(self, roll: float, pitch: float) -> Tuple[float, float]:
-        tilt = abs(roll) + abs(pitch)
-        reward = float(self.terrain_config["event_and_reward"]["tilt_reward_scale"]) * tilt
-        return float(tilt), float(reward)
-
-    def _compute_speed_reward(self, lin_vel: float, target_speed: float) -> float:
-        speed_loss = max(0.0, target_speed - lin_vel)
-        return float(self.terrain_config["event_and_reward"]["speed_reward_scale"]) * speed_loss
-
-    def _compute_stuck_reward(self, lin_vel: float, target_speed: float) -> Tuple[bool, float]:
+    def _compute_stuck(self, lin_vel: float, target_speed: float) -> Tuple[bool, float]:
         if not self._is_failure_enabled("stuck"):
-            return False, 0.0
+            return False
         stuck = lin_vel < float(self.terrain_config["event_and_reward"]["stuck_speed_threshold"]) and target_speed > 0.2
         if not stuck:
-            return False, 0.0
-        return True, float(self.terrain_config["event_and_reward"]["stuck_reward"])
+            return False
+        return True
 
     def _is_out_of_terrain_edge(self) -> bool:
         """Check whether robot base xy leaves terrain bounds (with optional margin)."""
@@ -638,7 +610,7 @@ class TestEnv:
             return True
         if self._is_failure_enabled("base_collision") and base_collision and self.terrain_config["termination"]["terminate_on_base_collision"]:
             return True
-        if self._is_failure_enabled("stuck") and base_collision and self.terrain_config["termination"]["terminate_on_stuck"]:
+        if self._is_failure_enabled("stuck") and self.terrain_config["termination"]["terminate_on_stuck"]:
             return True
         if out_of_terrain_edge and self.terrain_config["termination"]["terminate_on_terrain_edge"]:
             return True
@@ -647,184 +619,123 @@ class TestEnv:
 
     def compute_terrain_reward(self) -> Tuple[float, dict, bool]:
         # Compute reward using controller-style reward scales when available.
-        # Fallback to existing terrain-style rewards if controller scales absent.
-        try:
-            base_z, lin_vel, roll, pitch, target_speed = self._collect_motion_state()
+        base_z, lin_vel, roll, pitch, target_speed = self._collect_motion_state()
 
-            # analyze contacts
-            collided, base_collision, thigh_collision = self._analyze_contacts()
+        # analyze contacts
+        collided, base_collision, thigh_collision = self._analyze_contacts()
 
-            # fallen / out_of_terrain_edge
-            fallen = self._is_fallen(base_z, roll, pitch)
-            out_of_terrain_edge = self._is_out_of_terrain_edge()
+        # fallen / out_of_terrain_edge
+        fallen = self._is_fallen(base_z, roll, pitch)
+        out_of_terrain_edge = self._is_out_of_terrain_edge()
 
-            # termination decision (use existing compute_done)
-            done = self._compute_done(fallen, base_collision, out_of_terrain_edge)
+        # termination decision (use existing compute_done)
+        done = self._compute_done(fallen, base_collision, out_of_terrain_edge)
 
-            reward = 0.0
-            comp_rewards = {}
+        reward = 0.0
+        comp_rewards = {}
 
-            # If controller reward scales are available, use them
-            if self.reward_scales:
-                # tracking linear velocity
-                if 'tracking_lin_vel' in self.reward_scales:
-                    cmd = np.array(self.go2_config.get('cmd_init', [1.0, 0, 0]), dtype=np.float32)
-                    lin_err = np.sum((cmd[:2] - self.data.qvel[:2]) ** 2)
-                    tracking_lin = np.exp(- lin_err / max(1e-6, self.tracking_sigma))
-                    val = float(self.reward_scales.get('tracking_lin_vel', 0.0) * tracking_lin)
-                    reward += val
-                    comp_rewards['tracking_lin_vel'] = val
+        # If controller reward scales are available, use them
+        if self.reward_scales:
+            # tracking linear velocity
+            if 'tracking_lin_vel' in self.reward_scales:
+                cmd = np.array(self.go2_config.get('cmd_init', [1.0, 0, 0]), dtype=np.float32)
+                lin_err = np.sum((cmd[:2] - self.data.qvel[:2]) ** 2)
+                tracking_lin = np.exp(- lin_err / max(1e-6, self.tracking_sigma))
+                val = float(self.reward_scales.get('tracking_lin_vel', 0.0) * tracking_lin)
+                reward += val
+                comp_rewards['tracking_lin_vel'] = val
 
-                # tracking angular vel (yaw)
-                if 'tracking_ang_vel' in self.reward_scales:
-                    cmd = np.array(self.go2_config.get('cmd_init', [0, 0, 0]), dtype=np.float32)
-                    ang_err = (cmd[2] - float(self.data.qvel[5])) ** 2
-                    tracking_ang = np.exp(- ang_err / max(1e-6, self.tracking_sigma))
-                    val = float(self.reward_scales.get('tracking_ang_vel', 0.0) * tracking_ang)
-                    reward += val
-                    comp_rewards['tracking_ang_vel'] = val
+            # tracking angular vel (yaw)
+            if 'tracking_ang_vel' in self.reward_scales:
+                cmd = np.array(self.go2_config.get('cmd_init', [0, 0, 0]), dtype=np.float32)
+                ang_err = (cmd[2] - float(self.data.qvel[5])) ** 2
+                tracking_ang = np.exp(- ang_err / max(1e-6, self.tracking_sigma))
+                val = float(self.reward_scales.get('tracking_ang_vel', 0.0) * tracking_ang)
+                reward += val
+                comp_rewards['tracking_ang_vel'] = val
 
-                # torque penalty (approximate via PD call using controller default angles)
-                if 'torques' in self.reward_scales:
+            # torque penalty (approximate via PD call using controller default angles)
+            if 'torques' in self.reward_scales:
+                try:
+                    target_dof_pos = self.go2_controller.default_angles.copy()
                     try:
-                        target_dof_pos = self.go2_controller.default_angles.copy()
-                        try:
-                            num_j = int(getattr(self.go2_controller, 'num_actions', 12))
-                        except Exception:
-                            num_j = 12
-                        qpos_j = self.data.qpos[7:7 + num_j]
-                        qvel_j = self.data.qvel[6:6 + num_j]
-                        tau = pd_control(target_dof_pos, qpos_j, self.go2_controller.kps, np.zeros_like(self.go2_controller.kds), qvel_j, self.go2_controller.kds)
-                        torque_pen = np.sum(np.square(tau))
-                        val = float(self.reward_scales.get('torques', 0.0) * torque_pen)
-                        reward += val
-                        comp_rewards['torques'] = val
+                        num_j = int(getattr(self.go2_controller, 'num_actions', 12))
                     except Exception:
-                        comp_rewards['torques'] = 0.0
+                        num_j = 12
+                    qpos_j = self.data.qpos[7:7 + num_j]
+                    qvel_j = self.data.qvel[6:6 + num_j]
+                    tau = pd_control(target_dof_pos, qpos_j, self.go2_controller.kps, np.zeros_like(self.go2_controller.kds), qvel_j, self.go2_controller.kds)
+                    torque_pen = np.sum(np.square(tau))
+                    val = float(self.reward_scales.get('torques', 0.0) * torque_pen)
+                    reward += val
+                    comp_rewards['torques'] = val
+                except Exception:
+                    comp_rewards['torques'] = 0.0
 
-                # dof pos limits penalty
-                if 'dof_pos_limits' in self.reward_scales:
-                    dof_pos = np.asarray(self.data.qpos[7:])
+            # dof pos limits penalty
+            if 'dof_pos_limits' in self.reward_scales:
+                dof_pos = np.asarray(self.data.qpos[7:])
+                soft_limit = 1.0
+                try:
+                    soft_limit = float(getattr(self.rcfg.rewards, 'soft_dof_pos_limit', 1.0)) if self.rcfg is not None else 1.0
+                except Exception:
                     soft_limit = 1.0
-                    try:
-                        soft_limit = float(getattr(self.rcfg.rewards, 'soft_dof_pos_limit', 1.0)) if self.rcfg is not None else 1.0
-                    except Exception:
-                        soft_limit = 1.0
-                    limit = 2.0 * soft_limit
-                    out_limits = np.sum(np.maximum(0.0, np.abs(dof_pos) - limit))
-                    val = float(self.reward_scales.get('dof_pos_limits', 0.0) * out_limits)
-                    reward += val
-                    comp_rewards['dof_pos_limits'] = val
+                limit = 2.0 * soft_limit
+                out_limits = np.sum(np.maximum(0.0, np.abs(dof_pos) - limit))
+                val = float(self.reward_scales.get('dof_pos_limits', 0.0) * out_limits)
+                reward += val
+                comp_rewards['dof_pos_limits'] = val
 
-                # collision penalty
-                if 'collision' in self.reward_scales and collided:
-                    val = float(self.reward_scales.get('collision', 0.0))
-                    reward += val
-                    comp_rewards['collision'] = val
-                else:
-                    comp_rewards.setdefault('collision', 0.0)
-
-                # stuck penalty/reward (use computed stuck from terrain logic)
-                stuck, stuck_reward = self._compute_stuck_reward(lin_vel, target_speed)
-                if stuck:
-                    val = float(self.reward_scales.get('stuck', stuck_reward)) if 'stuck' in self.reward_scales else float(stuck_reward)
-                    reward += val
-                    comp_rewards['stuck'] = val
-                else:
-                    comp_rewards['stuck'] = 0.0
-
-                # termination reward
-                if 'termination' in self.reward_scales and (fallen or base_collision):
-                    val = float(self.reward_scales.get('termination', 0.0))
-                    reward += val
-                    comp_rewards['termination'] = val
-                else:
-                    comp_rewards.setdefault('termination', 0.0)
-
-                # apply only positive clipping
-                if getattr(self, 'only_positive_rewards', False):
-                    reward = max(0.0, float(reward))
-
-                # ensure common components
-                tilt_val, tilt_reward_val = self._compute_tilt_reward(roll, pitch)
-                comp_rewards.setdefault('tilt', float(tilt_reward_val))
-                comp_rewards.setdefault('speed', float(self._compute_speed_reward(lin_vel, target_speed)))
-
+            # collision penalty
+            if 'collision' in self.reward_scales and collided:
+                val = float(self.reward_scales.get('collision', 0.0))
+                reward += val
+                comp_rewards['collision'] = val
             else:
-                # fallback: original terrain-style reward
-                repeat = bool(self.terrain_config["event_and_reward"].get("repeat_reward", False))
-                reward = 0.0
-                fall_r = self._compute_fall_reward(fallen, repeat)
-                col_r = self._compute_collision_reward(collided, base_collision, thigh_collision, repeat)
-                tilt, tilt_reward = self._compute_tilt_reward(roll, pitch)
-                speed_r = self._compute_speed_reward(lin_vel, target_speed)
-                stuck, stuck_reward = self._compute_stuck_reward(lin_vel, target_speed)
-                reward += fall_r + col_r + tilt_reward + speed_r + stuck_reward
-                comp_rewards['fallen'] = float(fall_r)
-                comp_rewards['collision'] = float(col_r)
-                comp_rewards['tilt'] = float(tilt_reward)
-                comp_rewards['speed'] = float(speed_r)
-                comp_rewards['stuck'] = float(stuck_reward)
+                comp_rewards.setdefault('collision', 0.0)
 
-            # info
-            x = float(self.data.qpos[0])
-            y = float(self.data.qpos[1])
-            ground_height = self._get_ground_height_at_xy(x, y)
-            base_rel_height = base_z - ground_height
+            # stuck penalty/reward (use computed stuck from terrain logic)
+            stuck = self._compute_stuck(lin_vel, target_speed)
+            if stuck:
+                val = float(self.reward_scales.get('stuck', 0.0))
+                reward += val
+                comp_rewards['stuck'] = val
+            else:
+                comp_rewards['stuck'] = 0.0
 
-            info = {
-                "fallen": fallen,
-                "collided": collided,
-                "base_collision": base_collision,
-                "thigh_collision": thigh_collision,
-                "stuck": stuck,
-                "speed": lin_vel,
-                "base_height": base_z,
-                "ground_height": ground_height,
-                "base_rel_height": base_rel_height,
-                "out_of_terrain_edge": out_of_terrain_edge,
-                "rewards": comp_rewards,
-            }
+            # termination reward
+            if 'termination' in self.reward_scales and (fallen or base_collision):
+                val = float(self.reward_scales.get('termination', 0.0))
+                reward += val
+                comp_rewards['termination'] = val
+            else:
+                comp_rewards.setdefault('termination', 0.0)
 
-            return float(reward), info, bool(done)
-        except Exception as e:
-            # if anything goes wrong, fallback to previous implementation
-            # (preserve old terrain reward behavior)
-            # Recompute original terrain reward
-            reward = 0.0
-            repeat = bool(self.terrain_config["event_and_reward"].get("repeat_reward", False))
-            base_z, lin_vel, roll, pitch, target_speed = self._collect_motion_state()
-            fallen = self._is_fallen(base_z, roll, pitch)
-            reward += self._compute_fall_reward(fallen, repeat)
-            collided, base_collision, thigh_collision = self._analyze_contacts()
-            reward += self._compute_collision_reward(collided, base_collision, thigh_collision, repeat)
-            tilt, tilt_reward = self._compute_tilt_reward(roll, pitch)
-            reward += tilt_reward
-            reward += self._compute_speed_reward(lin_vel, target_speed)
-            stuck, stuck_reward = self._compute_stuck_reward(lin_vel, target_speed)
-            reward += stuck_reward
-            out_of_terrain_edge = self._is_out_of_terrain_edge()
-            done = self._compute_done(fallen, base_collision, out_of_terrain_edge)
-            info = {
-                "fallen": fallen,
-                "collided": collided,
-                "base_collision": base_collision,
-                "thigh_collision": thigh_collision,
-                "stuck": stuck,
-                "speed": lin_vel,
-                "base_height": base_z,
-                "ground_height": self._get_ground_height_at_xy(float(self.data.qpos[0]), float(self.data.qpos[1])),
-                "base_rel_height": base_z - self._get_ground_height_at_xy(float(self.data.qpos[0]), float(self.data.qpos[1])),
-                "out_of_terrain_edge": out_of_terrain_edge,
-                "rewards": {
-                    'fallen': float(self._compute_fall_reward(fallen, repeat)),
-                    'collision': float(self._compute_collision_reward(collided, base_collision, thigh_collision, repeat)),
-                    'tilt': float(tilt_reward),
-                    'speed': float(self._compute_speed_reward(lin_vel, target_speed)),
-                    'stuck': float(stuck_reward),
-                },
-            }
-            return float(reward), info, bool(done)
+            # apply only positive clipping
+            if getattr(self, 'only_positive_rewards', False):
+                reward = max(0.0, float(reward))
+
+        # info
+        x = float(self.data.qpos[0])
+        y = float(self.data.qpos[1])
+        ground_height = self._get_ground_height_at_xy(x, y)
+        base_rel_height = base_z - ground_height
+
+        info = {
+            "fallen": fallen,
+            "collided": collided,
+            "base_collision": base_collision,
+            "thigh_collision": thigh_collision,
+            "stuck": stuck,
+            "speed": lin_vel,
+            "base_height": base_z,
+            "ground_height": ground_height,
+            "base_rel_height": base_rel_height,
+            "out_of_terrain_edge": out_of_terrain_edge,
+            "rewards": comp_rewards,
+        }
+
+        return float(reward), info, bool(done)
 
 
 class TerrainGymEnv(gym.Env):

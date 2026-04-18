@@ -67,7 +67,8 @@ class GO2TerrainCfg( LeggedRobotCfg ):
             # dof_acc = 0 #-2.5e-7
             # base_height = -0. 
             # feet_air_time =  0 #1.0
-            # collision = 0 #-1.
+            collision = -1.
+            stuck = -1.
             # feet_stumble = -0.0 
             # action_rate = 0 #-0.01
             # stand_still = -0.
