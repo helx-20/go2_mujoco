@@ -89,12 +89,8 @@ class TrainEnv(gym.Env):
 
         terrain_action = centers
 
-        # Set controller's previous policy action so internal compute_action can use it
-        try:
-            self.trainer.go2_controller.action_policy_prev = np.asarray(controller_action, dtype=np.float32)
-        except Exception:
-            # best-effort; proceed even if attribute can't be set
-            pass
+        # Set controller's previous policy action
+        self.trainer.go2_controller.action_policy_prev = np.asarray(controller_action, dtype=np.float32)
 
         # Delegate stepping to trainer (applies terrain_action and runs controller loop)
         next_obs, act, reward, done, info = self.trainer.step(terrain_action)

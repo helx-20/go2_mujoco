@@ -574,12 +574,12 @@ class TestEnv:
         return (abs(x - center_x) >= half_x) or (abs(y - center_y) >= half_y)
 
     # TODO 增加stuck TODO 111
-    def _compute_done(self, fallen: bool, base_collision: bool, out_of_terrain_edge: bool) -> bool:
+    def _compute_done(self, fallen: bool, base_collision: bool, out_of_terrain_edge: bool, stuck: bool) -> bool:
         if self._is_failure_enabled("fallen") and fallen and self.terrain_config["termination"]["terminate_on_fall"]:
             return True
         if self._is_failure_enabled("base_collision") and base_collision and self.terrain_config["termination"]["terminate_on_base_collision"]:
             return True
-        if self._is_failure_enabled("stuck") and self.terrain_config["termination"]["terminate_on_stuck"]:
+        if self._is_failure_enabled("stuck") and stuck and self.terrain_config["termination"]["terminate_on_stuck"]:
             return True
         if out_of_terrain_edge and self.terrain_config["termination"]["terminate_on_terrain_edge"]:
             return True
@@ -597,8 +597,11 @@ class TestEnv:
         fallen = self._is_fallen(base_z, roll, pitch)
         out_of_terrain_edge = self._is_out_of_terrain_edge()
 
+        # stuck
+        stuck = self._compute_stuck(lin_vel, target_speed)
+
         # termination decision (use existing compute_done)
-        done = self._compute_done(fallen, base_collision, out_of_terrain_edge)
+        done = self._compute_done(fallen, base_collision, out_of_terrain_edge, stuck)
 
         reward = 0.0
         comp_rewards = {}
