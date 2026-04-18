@@ -23,7 +23,7 @@ except Exception:
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
-from training.utils.test_env import TestEnv
+from training.utils.test_env import TestEnv, safe_call
 
 class TrainEnv(gym.Env):
     """Gym wrapper around TestEnv for training a controller.
@@ -48,7 +48,7 @@ class TrainEnv(gym.Env):
         ctrl_dim = int(getattr(getattr(trainer, 'go2_controller', None), 'num_actions', 12))
 
         self.observation_space = Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
-        self.action_space = Box(low=-1.0, high=1.0, shape=(ctrl_dim,), dtype=np.float32)
+        self.action_space = Box(low=-10.0, high=10.0, shape=(ctrl_dim,), dtype=np.float32)
 
         # Build terrain action discretization edges using trainer-provided
         # dimensions when available. Default to [-1, 1] per-dimension which
@@ -72,65 +72,42 @@ class TrainEnv(gym.Env):
         # internal counters and current terrain action
         self._sim_since_terrain = self.total_sim_steps
         self._current_terrain_action = np.zeros(self.terrain_action_shape, dtype=np.float32)
+        self.trainer.terrain_changer.last_action = self._current_terrain_action.copy()
 
     def reset(self, *, seed=None, options=None):
         res = self.trainer.reset()
-        obs = res[:-4] # exclude last terrain action from observation
+        obs = np.concatenate([res[:36], self.trainer.go2_controller.action_policy_prev], axis=0)
         info = {}
 
         self._step_count = 0
         # reset timing counters so terrain will be sampled on first step
         self._sim_since_terrain = self.total_sim_steps
         self._current_terrain_action = np.zeros(self.terrain_action_shape, dtype=np.float32)
+        self.trainer.terrain_changer.last_action = self._current_terrain_action.copy()
         return obs, info
 
     def step(self, controller_action) -> Tuple[np.ndarray, float, bool, bool, dict]:
         # Ensure arrays
         controller_action = np.asarray(controller_action, dtype=np.float32)
 
-        # If it's time to update terrain, sample and apply a new terrain action
-        sampled_terrain = False
-        if self._sim_since_terrain >= self.total_sim_steps:
-            bins = np.random.randint(0, 10, size=self.terrain_action_shape)
-
-            centers = np.zeros(self.terrain_action_shape, dtype=np.float32)
-            flat_bins = np.asarray(bins).reshape(-1)
-            for d in range(flat_bins.shape[0]):
-                b = int(flat_bins[d])
-                e = self.terrain_action_edges[d]
-                centers.flat[d] = 0.5 * (e[b] + e[b + 1])
-
-            self._current_terrain_action = centers
-            # apply terrain action
-            try:
-                self.trainer.terrain_changer.apply_action_vector(self._current_terrain_action)
-                self.trainer.terrain_changer._refresh_terrain_safe()
-            except Exception:
-                pass
-            if getattr(self.trainer, 'render', False):
-                try:
-                    self.trainer.viewer.update_hfield(self.trainer.terrain_changer.hfield_id)
-                    self.trainer.viewer.sync()
-                except Exception:
-                    pass
-
-            self._sim_since_terrain = 0
-            sampled_terrain = True
-
-        # Set controller previous action for observations
+        # Keep the controller's recorded previous policy in sync with the
+        # externally provided controller_action so observations match.
         self.trainer.go2_controller.action_policy_prev = controller_action.copy()
 
-        # compute target dof positions from provided controller action (policy-scale -> dof pos)
-        action_scale = float(getattr(self.trainer.go2_controller, 'action_scale', 1.0))
+        # Compute target dof positions from provided controller action (policy-scale -> dof pos)
+        try:
+            action_scale = float(getattr(self.trainer.go2_controller, 'action_scale', 1.0))
+        except Exception:
+            action_scale = 1.0
         target_dof_pos = controller_action * action_scale + self.trainer.go2_controller.default_angles
 
-        # run low-level simulation for one controller interval
+        # Run low-level simulation for one controller interval. At control
+        # boundaries we use the externally provided target (zero-order hold).
         for sim_i in range(int(self.control_decimation)):
             self.trainer.robot_counter += 1
             step_start = time.time()
 
             num_j = int(getattr(self.trainer.go2_controller, 'num_actions', 12))
-
             qpos_j = self.trainer.data.qpos[7:7 + num_j]
             qvel_j = self.trainer.data.qvel[6:6 + num_j]
             tau = pd_control(target_dof_pos, qpos_j, getattr(self.trainer.go2_controller, 'kps'), np.zeros_like(getattr(self.trainer.go2_controller, 'kds')), qvel_j, getattr(self.trainer.go2_controller, 'kds'))
@@ -156,17 +133,39 @@ class TrainEnv(gym.Env):
         # advance sim counter
         self._sim_since_terrain += int(self.control_decimation)
 
+        # If it's time to update terrain, sample and apply a new terrain action
+        sampled_terrain = False
+        if self._sim_since_terrain >= self.total_sim_steps:
+            bins = np.random.randint(0, 10, size=self.terrain_action_shape)
+
+            centers = np.zeros(self.terrain_action_shape, dtype=np.float32)
+            flat_bins = np.asarray(bins).reshape(-1)
+            for d in range(flat_bins.shape[0]):
+                b = int(flat_bins[d])
+                e = self.terrain_action_edges[d]
+                centers.flat[d] = 0.5 * (e[b] + e[b + 1])
+
+            self._current_terrain_action = centers
+            # apply terrain action
+            try:
+                self.trainer.terrain_changer.apply_action_vector(self._current_terrain_action)
+                self.trainer.terrain_changer._refresh_terrain_safe()
+            except Exception:
+                pass
+            if getattr(self.trainer, 'render', False):
+                self.trainer.viewer.update_hfield(self.trainer.terrain_changer.hfield_id)
+                self.trainer.viewer.sync()
+
+            self.trainer.terrain_changer.last_action = np.asarray(self._current_terrain_action, dtype=np.float32)
+
+            self._sim_since_terrain = 0
+            sampled_terrain = True
+
         # compute reward / done info at controller step frequency (instantaneous)
         total_reward, reward_info, done = self.trainer.compute_reward()
-
-        # Update last action so observations can include it
-        try:
-            self.trainer.terrain_changer.last_action = np.asarray(self._current_terrain_action, dtype=np.float32)
-        except Exception:
-            pass
-
-        next_obs = self.trainer.get_terrain_observation()
-        next_obs = next_obs[:-4]
+        
+        self.trainer.go2_controller.cmd = self.trainer.go2_controller.update_command(self.trainer.data, self.trainer.go2_controller.cmd, self.trainer.go2_controller.heading_stiffness, self.trainer.go2_controller.heading_target, self.trainer.go2_controller.heading_command)
+        next_obs = self.trainer.go2_controller.get_observation(self.trainer.data).astype(np.float32)
 
         self._step_count += 1
         truncated = False
@@ -174,9 +173,10 @@ class TrainEnv(gym.Env):
             truncated = True
 
         terminated = bool(done)
+        done = bool(done or truncated)
         failed = bool(reward_info.get('fallen', False) or reward_info.get('collided', False) or reward_info.get('base_collision', False) or reward_info.get('thigh_collision', False) or reward_info.get('stuck', False))
 
-        if terminated and (not truncated) and (not failed):
+        if done and (not truncated) and (not failed):
             info_success = True
             success_reward = self.trainer.reward_scales.get('success', 0.0)
         else:
@@ -193,8 +193,9 @@ class TrainEnv(gym.Env):
         info['success'] = info_success
         reward = float(total_reward) + float(success_reward)
 
-        if done:
-            print(f"Episode done at step {self._step_count} (terminated={terminated}, truncated={truncated}), total_reward={total_reward:.3f}, success_reward={success_reward:.3f}, info={info}")
+        # if done or truncated:
+        #     print(f"Episode done at step {self._step_count} (done={done}, truncated={truncated}), total_reward={total_reward:.3f}")
+        #     import pdb; pdb.set_trace()
 
         return next_obs, float(reward), bool(terminated), bool(truncated), info
 

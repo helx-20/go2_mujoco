@@ -117,7 +117,9 @@ class Go2Controller:
 
         obs_tensor = torch.from_numpy(obs).unsqueeze(0)
         # policy inference
-        action_policy = self.policy(obs_tensor).detach().numpy().squeeze()
+        action_policy = self.policy(obs_tensor).squeeze()
+        if isinstance(action_policy, torch.Tensor):
+            action_policy = action_policy.detach().cpu().numpy()
         # model action order
         target_dof_pos = action_policy * self.action_scale + self.default_angles
         # policy action order used for next step

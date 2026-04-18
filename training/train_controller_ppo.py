@@ -18,6 +18,7 @@ if ROOT not in sys.path:
 import yaml
 import numpy as np
 from stable_baselines3 import PPO
+import types
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
@@ -33,21 +34,13 @@ warnings.filterwarnings("ignore", message=".*Please upgrade to Gymnasium.*", cat
 logging.getLogger("gym").setLevel(logging.ERROR)
 logging.getLogger("gymnasium").setLevel(logging.ERROR)
 
-class DummyPolicy(torch.nn.Module):
-    def __init__(self, num_actions=12):
-        super().__init__()
-        self.num_actions = num_actions
-        self.action_policy_prev = torch.zeros(self.num_actions, dtype=torch.float32)
 
-    def forward(self, x):
-        return torch.zeros((x.shape[0], self.num_actions), dtype=torch.float32)
-
-def make_env_fn(max_episode_steps):
+def make_env_fn(warmup_policy, max_episode_steps):
     def _thunk():
         # Create a lightweight dummy policy to satisfy TestEnv/Go2Controller
         config_file_path = "go2_training.yaml"
         terrain_cfg = "terrain_config.yaml"
-        trainer = TestEnv(policy=DummyPolicy(), config_file_path=config_file_path, terrain_config_file=terrain_cfg)
+        trainer = TestEnv(policy=warmup_policy, config_file_path=config_file_path, terrain_config_file=terrain_cfg)
         env = TrainEnv(trainer=trainer, max_episode_steps=max_episode_steps)
         return Monitor(env)
 
@@ -55,12 +48,12 @@ def make_env_fn(max_episode_steps):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--total_timesteps', type=int, default=400000)
+    parser.add_argument('--total_timesteps', type=int, default=4000000)
     parser.add_argument('--num_envs', type=int, default=16)
     parser.add_argument('--sim_device', type=str, default='cpu')
     parser.add_argument('--rl_device', type=str, default='cpu')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--max_steps', type=int, default=21)
+    parser.add_argument('--max_steps', type=int, default=30)
     parser.add_argument('--log_interval', type=int, default=20000, help='Timesteps between simple stdout progress prints')
     parser.add_argument('--eval_freq', type=int, default=20000, help='Timesteps between evaluations')
     parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
@@ -99,9 +92,9 @@ def main():
         
     # create vec env
     # create envs with rendering disabled by default
-    # wrapper = PolicyOnlyWrapper(sb3_pretrain_model.policy.mlp_extractor.policy_net.to('cpu').eval(), sb3_pretrain_model.policy.action_net.to('cpu').eval()).cpu()
+    wrapper = PolicyOnlyWrapper(sb3_pretrain_model.policy.mlp_extractor.policy_net.to('cpu').eval(), sb3_pretrain_model.policy.action_net.to('cpu').eval()).cpu()
     
-    env_fns = [make_env_fn(args.max_steps) for _ in range(args.num_envs)]
+    env_fns = [make_env_fn(wrapper, args.max_steps) for _ in range(args.num_envs)]
     if args.num_envs == 1:
         vec_env = DummyVecEnv(env_fns)
     else:
@@ -169,6 +162,18 @@ def main():
 
         model.policy.load_state_dict(policy_sd)
         print(f'Initialized policy from {args.pretrain} — matched {len(matched)} tensors')
+
+    # Override `model.predict` to use the raw PolicyOnlyWrapper forward pass
+    try:
+        def _predict_using_wrapper(self, observation, deterministic=True):
+            out = model.policy.mlp_extractor.policy_net(observation)
+            out = model.policy.action_net(out)
+            return out, None
+
+        model.predict = types.MethodType(_predict_using_wrapper, model)
+        print('Patched model.predict to use PolicyOnlyWrapper (raw network outputs)')
+    except Exception as e:
+        print('Failed to patch model.predict:', e)
 
     # Print chosen hyperparameters and ensure model prints some progress; set verbose and attach a simple callback
     # Ensure model.n_steps/batch_size match args and recreate rollout_buffer to expected total size
@@ -266,7 +271,7 @@ def main():
 
         return results
 
-    # _ = evaluate_policy(model.policy, n_episodes=2)
+    _ = evaluate_policy(model.policy, n_episodes=2)
 
     class PolicyNetEvalCallback(BaseCallback):
         """Eval callback that runs episodes using `evaluate_policy(policy, ...)`.
@@ -333,9 +338,11 @@ def main():
         def _on_step(self) -> bool:
             if self.num_timesteps % self.log_interval == 0:
                 print(f'[SB3] timesteps={self.num_timesteps}')
+
             return True
 
     pb_cb = ProgressPrintCallback(log_interval=args.log_interval)
+
     model.learn(total_timesteps=int(args.total_timesteps), callback=[pb_cb, eval_callback])
 
     save_path = os.path.join(args.out, f'{args.run_name}_ppo.zip')
