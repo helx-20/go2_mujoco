@@ -81,7 +81,13 @@ if __name__ == "__main__":
         # 一定要先等几帧，不能马上控制
         counter = 1
         while counter % control_decimation != 0:
-            tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
+            try:
+                num_j = int(num_actions)
+            except Exception:
+                num_j = len(kps) if hasattr(kps, '__len__') else 12
+            qpos_j = d.qpos[7:7 + num_j]
+            qvel_j = d.qvel[6:6 + num_j]
+            tau = pd_control(target_dof_pos, qpos_j, kps, np.zeros_like(kds), qvel_j, kds)
             d.ctrl[:] = tau
             mujoco.mj_step(m, d)
             counter += 1
@@ -121,7 +127,13 @@ if __name__ == "__main__":
                 # transform action to target_dof_pos
                 target_dof_pos = action * action_scale + default_angles
 
-            tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
+            try:
+                num_j = int(num_actions)
+            except Exception:
+                num_j = len(kps) if hasattr(kps, '__len__') else 12
+            qpos_j = d.qpos[7:7 + num_j]
+            qvel_j = d.qvel[6:6 + num_j]
+            tau = pd_control(target_dof_pos, qpos_j, kps, np.zeros_like(kds), qvel_j, kds)
             d.ctrl[:] = tau
             mujoco.mj_step(m, d)
 

@@ -12,7 +12,9 @@ import numpy as np
 import math
 from scipy.stats import norm
 
-from deploy_mujoco.terrain_trainer import TerrainTrainer, TerrainGymEnv
+from training.utils.test_env import TestEnv, TerrainGymEnv
+import torch
+from stable_baselines3 import PPO
 
 
 alpha = 0.05
@@ -41,59 +43,47 @@ def calculate_val(the_list):
 
 def run(args):
     # go2_config_file: (foldername, cfg filename) relative to deploy_mujoco
-    go2_cfg = ("terrain", "go2_training.yaml") # go2_controller path is training/model/go2_controller_new.pt
+    config_file_path = "go2_training.yaml"
     terrain_cfg = "terrain_config.yaml"
 
     # If controller_path is a SB3 .zip, convert it to a TorchScript policy expected by Go2Controller
     controller_path = getattr(args, 'controller_path', None)
-    if controller_path and controller_path.endswith('.zip') and os.path.isfile(controller_path):
-        import torch as th
-        from stable_baselines3 import PPO
-        import yaml
+     # load SB3 model
+    sb3 = PPO.load(controller_path, device='cpu')
 
-        # load SB3 model
-        sb3 = PPO.load(controller_path, device='cpu')
+    # Export a lightweight wrapper that runs policy_net -> action_net so
+    # the traced module returns actions with correct shape. This omits
+    # the value_net and other modules.
+    policy_net = sb3.policy.mlp_extractor.policy_net
+    action_net = sb3.policy.action_net
+    class PolicyOnlyWrapper(torch.nn.Module):
+        def __init__(self, net_pi, act_net):
+            super().__init__()
+            self.net_pi = net_pi
+            self.act_net = act_net
 
-        # read num_obs from the go2 config YAML if possible
-        cfg_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../deploy_mujoco/terrain/configs", go2_cfg[1])
-        with open(cfg_path, 'r', encoding='utf-8') as f:
-            cfg = yaml.safe_load(f)
-            num_obs = int(cfg.get('num_obs', 48))
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            latent = self.net_pi(x)
+            actions = self.act_net(latent)
+            return actions
 
-        # Export a lightweight wrapper that runs policy_net -> action_net so
-        # the traced module returns actions with correct shape. This omits
-        # the value_net and other modules.
-        policy_net = sb3.policy.mlp_extractor.policy_net
-        action_net = sb3.policy.action_net
+    policy_net.to('cpu')
+    action_net.to('cpu')
+    policy_net.eval()
+    action_net.eval()
 
-        class PolicyOnlyWrapper(th.nn.Module):
-            def __init__(self, net_pi, act_net):
-                super().__init__()
-                self.net_pi = net_pi
-                self.act_net = act_net
+    wrapper = PolicyOnlyWrapper(policy_net, action_net).cpu()
+    # example = torch.zeros((1, 48), dtype=torch.float32)
+    # try:
+    #     traced = torch.jit.trace(wrapper, example, check_trace=False)
+    #     out_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'model', 'go2_controller_new.pt')
+    #     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    #     traced.save(out_path)
+    #     print('Converted policy_net+action_net from', controller_path, '->', out_path)
+    # except Exception as e:
+    #     print('Failed to trace policy wrapper:', e)
 
-            def forward(self, x: th.Tensor) -> th.Tensor:
-                latent = self.net_pi(x)
-                actions = self.act_net(latent)
-                return actions
-
-        policy_net.to('cpu')
-        action_net.to('cpu')
-        policy_net.eval()
-        action_net.eval()
-
-        wrapper = PolicyOnlyWrapper(policy_net, action_net).cpu()
-        example = th.zeros((1, num_obs), dtype=th.float32)
-        try:
-            traced = th.jit.trace(wrapper, example, check_trace=False)
-            out_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'model', 'go2_controller_new.pt')
-            os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            traced.save(out_path)
-            print('Converted policy_net+action_net from', controller_path, '->', out_path)
-        except Exception as e:
-            print('Failed to trace policy wrapper:', e)
-
-    trainer = TerrainTrainer(go2_cfg, terrain_cfg)
+    trainer = TestEnv(policy=wrapper, config_file_path=config_file_path, terrain_config_file=terrain_cfg)
     env = TerrainGymEnv(trainer, max_episode_steps=args.max_steps)
 
     n = args.episodes
@@ -103,16 +93,11 @@ def run(args):
 
     action_space = env.action_space
     # prepare discretization edges for actions: 10 bins per dimension
-    action_edges = None
-    if getattr(action_space, 'shape', None) and action_space.shape[0] > 0:
-        try:
-            low = np.asarray(action_space.low, dtype=np.float32)
-            high = np.asarray(action_space.high, dtype=np.float32)
-            # avoid zero-range
-            high = np.where(high == low, low + 1.0, high)
-            action_edges = [np.linspace(low[d], high[d], num=11) for d in range(low.shape[0])]
-        except Exception:
-            action_edges = None
+    low = np.asarray(action_space.low, dtype=np.float32)
+    high = np.asarray(action_space.high, dtype=np.float32)
+    # avoid zero-range
+    high = np.where(high == low, low + 1.0, high)
+    action_edges = [np.linspace(low[d], high[d], num=11) for d in range(low.shape[0])]
 
     # global buffers for criticality training data (across episodes)
     crit_data_all = []
@@ -129,31 +114,19 @@ def run(args):
         while not done:
             steps += 1
             # NDE: uniformly sample a terrain action from the environment action space
-            if getattr(action_space, 'shape', None) and action_space.shape[0] > 0:
-                # Sample discrete bin indices (0..9) per-dimension and map to bin centers for env
-                try:
-                    if action_edges is not None:
-                        # sample bins uniformly
-                        bins = np.random.randint(0, 10, size=action_space.shape)
-                        # map bins to continuous center values
-                        centers = np.zeros(action_space.shape, dtype=np.float32)
-                        flat_bins = np.asarray(bins).reshape(-1)
-                        for d in range(flat_bins.shape[0]):
-                            b = int(flat_bins[d])
-                            e = action_edges[d]
-                            centers.reshape(-1)[d] = 0.5 * (e[b] + e[b+1])
-                        action = centers
-                        # store discrete bins as action representation
-                        action = np.asarray(action, dtype=np.float32)
-                    else:
-                        a = action_space.sample()
-                        action = np.asarray(a, dtype=np.float32)
-                except Exception:
-                    a = action_space.sample()
-                    action = np.asarray(a, dtype=np.float32)
-            else:
-                action = np.array([], dtype=np.float32)
-
+            # sample bins uniformly
+            bins = np.random.randint(0, 10, size=action_space.shape)
+            # map bins to continuous center values
+            centers = np.zeros(action_space.shape, dtype=np.float32)
+            flat_bins = np.asarray(bins).reshape(-1)
+            for d in range(flat_bins.shape[0]):
+                b = int(flat_bins[d])
+                e = action_edges[d]
+                centers.reshape(-1)[d] = 0.5 * (e[b] + e[b+1])
+            action = centers
+            # store discrete bins as action representation
+            action = np.asarray(action, dtype=np.float32)
+                    
             # record observation and action for criticality dataset (obs before applying action)
             if crit_out is not None:
                 ep_obs.append(obs)
@@ -209,7 +182,7 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--controller_path', type=str, default='training/model/run_ppo.zip')
+    parser.add_argument('--controller_path', type=str, default='training/model/actor_init.zip')
     parser.add_argument('--worker_id', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=500)
     parser.add_argument('--max_steps', type=int, default=40)

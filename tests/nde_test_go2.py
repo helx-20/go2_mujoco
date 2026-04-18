@@ -54,16 +54,11 @@ def run(args):
 
     action_space = env.action_space
     # prepare discretization edges for actions: 10 bins per dimension
-    action_edges = None
-    if getattr(action_space, 'shape', None) and action_space.shape[0] > 0:
-        try:
-            low = np.asarray(action_space.low, dtype=np.float32)
-            high = np.asarray(action_space.high, dtype=np.float32)
-            # avoid zero-range
-            high = np.where(high == low, low + 1.0, high)
-            action_edges = [np.linspace(low[d], high[d], num=11) for d in range(low.shape[0])]
-        except Exception:
-            action_edges = None
+    low = np.asarray(action_space.low, dtype=np.float32)
+    high = np.asarray(action_space.high, dtype=np.float32)
+    # avoid zero-range
+    high = np.where(high == low, low + 1.0, high)
+    action_edges = [np.linspace(low[d], high[d], num=11) for d in range(low.shape[0])]
 
     # global buffers for criticality training data (across episodes)
     crit_data_all = []
@@ -80,30 +75,18 @@ def run(args):
         while not done:
             steps += 1
             # NDE: uniformly sample a terrain action from the environment action space
-            if getattr(action_space, 'shape', None) and action_space.shape[0] > 0:
-                # Sample discrete bin indices (0..9) per-dimension and map to bin centers for env
-                try:
-                    if action_edges is not None:
-                        # sample bins uniformly
-                        bins = np.random.randint(0, 10, size=action_space.shape)
-                        # map bins to continuous center values
-                        centers = np.zeros(action_space.shape, dtype=np.float32)
-                        flat_bins = np.asarray(bins).reshape(-1)
-                        for d in range(flat_bins.shape[0]):
-                            b = int(flat_bins[d])
-                            e = action_edges[d]
-                            centers.reshape(-1)[d] = 0.5 * (e[b] + e[b+1])
-                        action = centers
-                        # store discrete bins as action representation
-                        action = np.asarray(action, dtype=np.float32)
-                    else:
-                        a = action_space.sample()
-                        action = np.asarray(a, dtype=np.float32)
-                except Exception:
-                    a = action_space.sample()
-                    action = np.asarray(a, dtype=np.float32)
-            else:
-                action = np.array([], dtype=np.float32)
+            # sample bins uniformly
+            bins = np.random.randint(0, 10, size=action_space.shape)
+            # map bins to continuous center values
+            centers = np.zeros(action_space.shape, dtype=np.float32)
+            flat_bins = np.asarray(bins).reshape(-1)
+            for d in range(flat_bins.shape[0]):
+                b = int(flat_bins[d])
+                e = action_edges[d]
+                centers.reshape(-1)[d] = 0.5 * (e[b] + e[b+1])
+            action = centers
+            # store discrete bins as action representation
+            action = np.asarray(action, dtype=np.float32)
 
             # record observation and action for criticality dataset (obs before applying action)
             if crit_out is not None:

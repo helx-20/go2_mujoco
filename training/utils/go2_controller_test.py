@@ -13,12 +13,11 @@ from deploy_mujoco.utils import get_gravity_orientation, pd_control, quat_to_hea
 
 
 class Go2Controller:
-    def __init__(self, config_file):
-        with open(f"{os.path.dirname(os.path.realpath(__file__))}/configs/{config_file}", "r", encoding='utf-8') as f:
+    def __init__(self, config_file_path, policy):
+        with open(f"{os.path.dirname(os.path.realpath(__file__))}/{config_file_path}", "r", encoding='utf-8') as f:
             self.config = yaml.load(f, Loader=yaml.FullLoader)
 
-        self.policy = torch.jit.load(self.config['policy_path'])
-        print(f"Loaded policy from {self.config['policy_path']}")
+        self.policy = policy
 
         self.num_obs = self.config["num_obs"]
         self.num_actions = self.config["num_actions"]
@@ -119,7 +118,6 @@ class Go2Controller:
         obs_tensor = torch.from_numpy(obs).unsqueeze(0)
         # policy inference
         action_policy = self.policy(obs_tensor).detach().numpy().squeeze()
-
         # model action order
         target_dof_pos = action_policy * self.action_scale + self.default_angles
         # policy action order used for next step
@@ -150,7 +148,7 @@ class Go2Controller:
                 try:
                     num_j = int(self.num_actions)
                 except Exception:
-                    num_j = len(self.kps) if hasattr(self.kps, '__len__') else 12
+                    num_j = 12
                 qpos_j = d.qpos[7:7 + num_j]
                 qvel_j = d.qvel[6:6 + num_j]
                 tau = pd_control(target_dof_pos, qpos_j, self.kps, np.zeros_like(self.kds), qvel_j, self.kds)
@@ -170,7 +168,7 @@ class Go2Controller:
                 try:
                     num_j = int(self.num_actions)
                 except Exception:
-                    num_j = len(self.kps) if hasattr(self.kps, '__len__') else 12
+                    num_j = 12
                 qpos_j = d.qpos[7:7 + num_j]
                 qvel_j = d.qvel[6:6 + num_j]
                 tau = pd_control(target_dof_pos, qpos_j, self.kps, np.zeros_like(self.kds), qvel_j, self.kds)
