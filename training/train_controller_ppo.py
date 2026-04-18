@@ -266,7 +266,7 @@ def main():
 
         return results
 
-    _ = evaluate_policy(model.policy, n_episodes=2)
+    # _ = evaluate_policy(model.policy, n_episodes=2)
 
     class PolicyNetEvalCallback(BaseCallback):
         """Eval callback that runs episodes using `evaluate_policy(policy, ...)`.

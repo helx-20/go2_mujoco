@@ -142,8 +142,8 @@ class TestEnv:
         # scale reward_scales to trainer timestep units to match ControllerEnv semantics
         sim_dt = float(self.model.opt.timestep)
         ctrl_dec = int(self.control_decimation) if hasattr(self, 'control_decimation') else 1
-        terrain_dec = int(self.terrain_decimation) if hasattr(self, 'terrain_decimation') and self.terrain_decimation is not None else 1
-        dt_scale = sim_dt * float(ctrl_dec) * max(1, int(terrain_dec))
+        terrain_dec = int(self.terrain_decimation) if hasattr(self, 'terrain_decimation') else 1
+        dt_scale = sim_dt * float(ctrl_dec) * float(terrain_dec)
         for k in list(self.reward_scales.keys()):
             if k not in ['success', 'collision', 'stuck']:
                 self.reward_scales[k] = float(self.reward_scales[k]) * dt_scale
@@ -762,10 +762,11 @@ class TerrainGymEnv(gym.Env):
             truncated = True
 
         terminated = bool(done)
+        failed = bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
 
         # If episode ended due to truncation (time limit) and not due to a failure (terminated==False),
         # give an episodic success reward if configured in terrain_config and mark info['success']=True.
-        if terminated and (not truncated):
+        if terminated and (not truncated) and (not failed):
             info['success'] = True
             success_reward = self.trainer.reward_scales.get('success', 0.0)
         else:
