@@ -96,9 +96,9 @@ class TrainEnv(gym.Env):
 
         # Compute target dof positions from provided controller action (policy-scale -> dof pos)
         try:
-            action_scale = float(getattr(self.trainer.go2_controller, 'action_scale', 1.0))
+            action_scale = float(getattr(self.trainer.go2_controller, 'action_scale', 0.25))
         except Exception:
-            action_scale = 1.0
+            action_scale = 0.25
         target_dof_pos = controller_action * action_scale + self.trainer.go2_controller.default_angles
 
         # Run low-level simulation for one controller interval. At control
@@ -192,10 +192,6 @@ class TrainEnv(gym.Env):
 
         info['success'] = info_success
         reward = float(total_reward) + float(success_reward)
-
-        # if done or truncated:
-        #     print(f"Episode done at step {self._step_count} (done={done}, truncated={truncated}), total_reward={total_reward:.3f}")
-        #     import pdb; pdb.set_trace()
 
         return next_obs, float(reward), bool(terminated), bool(truncated), info
 
