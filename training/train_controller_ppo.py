@@ -294,7 +294,23 @@ def main():
         except Exception as e:
             if verbose:
                 print(f'[safe_model_save] failed to save model: {e}')
-            return False
+            # Fallback: try to save only the policy state dict with torch
+            try:
+                fb_dir = os.path.dirname(save_path)
+                if fb_dir:
+                    os.makedirs(fb_dir, exist_ok=True)
+                fb_path = save_path
+                # prefer .pt for fallback
+                if not fb_path.endswith('.pt'):
+                    fb_path = save_path + '.policy.pt'
+                torch.save({'policy_state_dict': model_obj.policy.state_dict()}, fb_path)
+                if verbose:
+                    print(f'[safe_model_save] Fallback: saved policy state_dict to {fb_path}')
+                return True
+            except Exception as e2:
+                if verbose:
+                    print(f'[safe_model_save] fallback save also failed: {e2}')
+                return False
         finally:
             for attr, val in cleared.items():
                 try:

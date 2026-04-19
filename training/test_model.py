@@ -13,6 +13,8 @@ import math
 from scipy.stats import norm
 
 from training.utils.test_env import TestEnv, TerrainGymEnv
+from training.utils.train_env import TrainEnv
+from stable_baselines3.common.monitor import Monitor
 import torch
 from stable_baselines3 import PPO
 
@@ -40,6 +42,13 @@ def calculate_val(the_list):
         mean_old = mean_new
     return Mean, Relative_half_width, Var
 
+def make_env_fn(trainer, max_episode_steps=1000):
+    def _thunk():
+        env = TrainEnv(trainer=trainer, max_episode_steps=max_episode_steps)
+        return Monitor(env)
+
+    return _thunk
+
 
 def run(args):
     # go2_config_file: (foldername, cfg filename) relative to deploy_mujoco
@@ -49,7 +58,19 @@ def run(args):
     # If controller_path is a SB3 .zip, convert it to a TorchScript policy expected by Go2Controller
     controller_path = getattr(args, 'controller_path', None)
      # load SB3 model
-    sb3 = PPO.load(controller_path, device='cpu')
+    if controller_path.endswith('.zip'):
+        sb3 = PPO.load(controller_path, device='cpu')
+    elif controller_path.endswith('.pt'):
+        hidden_sizes = [512, 256, 128]
+        policy_kwargs = {'net_arch': dict(pi=hidden_sizes, vf=hidden_sizes), 'activation_fn': torch.nn.ELU}
+        # Create model with CLI-configured hyperparameters
+        trainer = TestEnv(policy=None, config_file_path=config_file_path, terrain_config_file=terrain_cfg)
+        dummy_env = make_env_fn(trainer, max_episode_steps=1000)()  # create a dummy env to infer action space
+        sb3 = PPO('MlpPolicy', dummy_env, policy_kwargs=policy_kwargs, device='cpu')
+        # Load state dict from .pt file
+        state_dict = torch.load(controller_path, map_location='cpu')
+        state_dict = state_dict['policy_state_dict']
+        sb3.policy.load_state_dict(state_dict)
 
     # Export a lightweight wrapper that runs policy_net -> action_net so
     # the traced module returns actions with correct shape. This omits
@@ -182,7 +203,7 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--controller_path', type=str, default='training/model/actor_init.zip')
+    parser.add_argument('--controller_path', type=str, default='training/model/best/best_model.zip.policy.pt', help='Path to SB3 .zip or .pt file containing the trained policy')
     parser.add_argument('--worker_id', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=500)
     parser.add_argument('--max_steps', type=int, default=40)
