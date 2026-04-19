@@ -48,7 +48,7 @@ def make_env_fn(warmup_policy, max_episode_steps):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--total_timesteps', type=int, default=4000000)
+    parser.add_argument('--total_timesteps', type=int, default=2000000)
     parser.add_argument('--num_envs', type=int, default=16)
     parser.add_argument('--sim_device', type=str, default='cpu')
     parser.add_argument('--rl_device', type=str, default='cpu')
@@ -271,6 +271,37 @@ def main():
 
         return results
 
+    def safe_model_save(model_obj, save_path, verbose=1):
+        """Save `model_obj` while temporarily clearing attributes that may be
+        unpickleable (eg. multiprocessing auth keys inside VecEnv/processes).
+        Restores cleared attributes after the save attempt.
+        """
+        cleared = {}
+        for attr in ('env', 'envs', 'training_env', 'vec_env'):
+            if hasattr(model_obj, attr):
+                cleared[attr] = getattr(model_obj, attr)
+                try:
+                    setattr(model_obj, attr, None)
+                except Exception:
+                    # best-effort: if we can't clear it, ignore and continue
+                    cleared.pop(attr, None)
+
+        try:
+            model_obj.save(save_path)
+            if verbose:
+                print(f'[safe_model_save] Saved model to {save_path}')
+            return True
+        except Exception as e:
+            if verbose:
+                print(f'[safe_model_save] failed to save model: {e}')
+            return False
+        finally:
+            for attr, val in cleared.items():
+                try:
+                    setattr(model_obj, attr, val)
+                except Exception:
+                    pass
+
     _ = evaluate_policy(model.policy, n_episodes=2)
 
     class PolicyNetEvalCallback(BaseCallback):
@@ -315,9 +346,11 @@ def main():
                 os.makedirs(self.best_model_save_path, exist_ok=True)
                 save_to = os.path.join(self.best_model_save_path, 'best_model.zip')
                 try:
-                    self.model.save(save_to)
-                    if self.verbose:
+                    ok = safe_model_save(self.model, save_to, verbose=self.verbose)
+                    if ok and self.verbose:
                         print(f'[PolicyNetEval] New best mean_reward={mean_r:.6f}, saved to {save_to}')
+                    elif not ok and self.verbose:
+                        print(f'[PolicyNetEval] failed to save model to {save_to}')
                 except Exception as e:
                     if self.verbose:
                         print(f'[PolicyNetEval] failed to save model: {e}')
@@ -346,8 +379,10 @@ def main():
     model.learn(total_timesteps=int(args.total_timesteps), callback=[pb_cb, eval_callback])
 
     save_path = os.path.join(args.out, f'{args.run_name}_ppo.zip')
-    model.save(save_path)
-    print('Saved model to', save_path)
+    if safe_model_save(model, save_path, verbose=1):
+        print('Saved model to', save_path)
+    else:
+        print('Failed to save final model to', save_path)
 
 if __name__ == '__main__':
     main()
