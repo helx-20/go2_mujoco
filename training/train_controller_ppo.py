@@ -48,7 +48,7 @@ def make_env_fn(warmup_policy, max_episode_steps):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--total_timesteps', type=int, default=2000000)
+    parser.add_argument('--total_timesteps', type=int, default=3000000)
     parser.add_argument('--num_envs', type=int, default=16)
     parser.add_argument('--sim_device', type=str, default='cpu')
     parser.add_argument('--rl_device', type=str, default='cpu')
@@ -58,15 +58,16 @@ def main():
     parser.add_argument('--eval_freq', type=int, default=20000, help='Timesteps between evaluations')
     parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
     parser.add_argument('--tensorboard_log', type=str, default='training/logs', help='TensorBoard log dir')
-    parser.add_argument('--out', type=str, default='training/model')
-    parser.add_argument('--run_name', type=str, default='run')
-    parser.add_argument('--learning_rate', type=float, default=1e-4)
-    parser.add_argument('--ent_coef', type=float, default=0.01)
-    parser.add_argument('--n_steps', type=int, default=128)
-    parser.add_argument('--batch_size', type=int, default=2048)
-    parser.add_argument('--pretrain', type=str, default='training/model/actor_init.zip',
-                        help='Path to a pretrained PyTorch model or SB3 .zip to initialize policy (default uses training/model/actor_init.zip)')
+    parser.add_argument('--out', type=str, default='training/models/')
+    parser.add_argument('--run_name', type=str, default='run3')
+    parser.add_argument('--learning_rate', type=float, default=1e-5)
+    parser.add_argument('--ent_coef', type=float, default=0.0)
+    parser.add_argument('--n_steps', type=int, default=512)
+    parser.add_argument('--batch_size', type=int, default=8192)
+    parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
+                        help='Path to a pretrained PyTorch model or SB3 .zip to initialize policy (default uses training/models/actor_init.zip)')
     args = parser.parse_args()
+    args.out = os.path.join(args.out, args.run_name)
 
     os.makedirs(args.out, exist_ok=True)
 
@@ -318,7 +319,7 @@ def main():
                 except Exception:
                     pass
 
-    _ = evaluate_policy(model.policy, n_episodes=2)
+    # _ = evaluate_policy(model.policy, n_episodes=2)
 
     class PolicyNetEvalCallback(BaseCallback):
         """Eval callback that runs episodes using `evaluate_policy(policy, ...)`.
@@ -357,7 +358,7 @@ def main():
                 print(f'[PolicyNetEval] timesteps={self.num_timesteps} mean_reward={mean_r:.6f}')
 
             # save best model (same behavior as original)
-            if mean_r > self.best_mean_reward:
+            if mean_r >= self.best_mean_reward:
                 self.best_mean_reward = mean_r
                 os.makedirs(self.best_model_save_path, exist_ok=True)
                 save_to = os.path.join(self.best_model_save_path, 'best_model.zip')

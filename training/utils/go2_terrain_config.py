@@ -51,30 +51,36 @@ class GO2TerrainCfg( LeggedRobotCfg ):
         soft_dof_pos_limit = 0.9
         base_height_target = 0.25
         only_positive_rewards = False
+        # class scales( LeggedRobotCfg.rewards.scales ):
+        #     torques = 0.0 # -0.0002
+        #     dof_pos_limits = -0.0 # -1.0
+        #     # termination = -1000 # -1000 # -5000 # -0.5
+        #     lin_vel_z = 0.0
+        #     tracking_lin_vel = 0.0 # 暂时加的
+        #     tracking_ang_vel = 0.0 # 暂时加的
+        #     termination = -0.0
+        #     tracking_lin_vel = 0.0
+        #     tracking_ang_vel = 0.0
+        #     lin_vel_z = -0.0
+        #     ang_vel_xy = -0.00
+        #     orientation = -0.
+        #     dof_vel = -0.
+        #     dof_acc = 0 #-2.5e-7
+        #     base_height = -0. 
+        #     feet_air_time =  0 #1.0
+        #     feet_stumble = -0.0 
+        #     action_rate = 0 #-0.01
+        #     stand_still = -0.
+        #     collision = -0.0
+        #     failed = -1.0
+        #     success = 1.0
+
         class scales( LeggedRobotCfg.rewards.scales ):
-            torques = -0.0002 # -0.0002
-            dof_pos_limits = -1.0 # -10.0
-            success = 1.0
-            # termination = -1000 # -1000 # -5000 # -0.5
-            # lin_vel_z = 0.0
-            # tracking_lin_vel = 0.0 # 暂时加的
-            # tracking_ang_vel = 0.0 # 暂时加的
-            # -----all set to zero except termination, tracking_lin_vel, tracking_ang_vel
-            # # termination = -0.0
-            # tracking_lin_vel = 0.0
-            # tracking_ang_vel = 0.0
-            # lin_vel_z = -0.0
-            # ang_vel_xy = -0.00
-            # orientation = -0.
-            # torques = 0 #-0.00001
-            # dof_vel = -0.
-            # dof_acc = 0 #-2.5e-7
-            # base_height = -0. 
-            # feet_air_time =  0 #1.0
-            failed = -1.
-            # feet_stumble = -0.0 
-            # action_rate = 0 #-0.01
-            # stand_still = -0.
+            torques = -0.0002
+            dof_pos_limits = -1.0
+            collision = -0.0
+            failed = -10.0
+            success = 10.0
 
     class terrain( LeggedRobotCfg.terrain ):
         mesh_type = "trimesh" # "heightfield" or "trimesh" or "ground_plane"

@@ -76,12 +76,14 @@ class TrainEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         res = self.trainer.reset()
-        obs = np.concatenate([res[:36], self.trainer.go2_controller.action_policy_prev], axis=0)
+        self.trainer.go2_controller.cmd = self.trainer.go2_controller.update_command(self.trainer.data, self.trainer.go2_controller.cmd, self.trainer.go2_controller.heading_stiffness, self.trainer.go2_controller.heading_target, self.trainer.go2_controller.heading_command)
+        obs = self.trainer.go2_controller.get_observation(self.trainer.data).astype(np.float32)
+        # obs = np.concatenate([res[:36], self.trainer.go2_controller.action_policy_prev], axis=0)
         info = {}
 
         self._step_count = 0
         # reset timing counters so terrain will be sampled on first step
-        self._sim_since_terrain = self.total_sim_steps
+        self._sim_since_terrain = 0 # self.total_sim_steps
         self._current_terrain_action = np.zeros(self.terrain_action_shape, dtype=np.float32)
         self.trainer.terrain_changer.last_action = self._current_terrain_action.copy()
         return obs, info
