@@ -24,6 +24,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 from training.utils.test_env import TestEnv, safe_call
+import torch
 
 class TrainEnv(gym.Env):
     """Gym wrapper around TestEnv for training a controller.
@@ -33,11 +34,19 @@ class TrainEnv(gym.Env):
     Reward: terrain reward (collision/fall)
     """
 
-    def __init__(self, trainer: TestEnv, max_episode_steps: int = 1000):
+    def __init__(self, trainer: TestEnv, max_episode_steps: int = 1000, nade=False, nade_model_path=None):
         super().__init__()
         self.trainer = trainer
         # Compatibility with Gymnasium / Stable-Baselines3 wrappers
         self.render_mode = None
+        self.nade = nade
+        if self.nade:
+            from criticality.utils.criticality_model import SimpleClassifier
+            self.nade_model = SimpleClassifier(input_dim=56)
+            self.nade_model.load_state_dict(torch.load(nade_model_path, map_location='cpu'))
+            self.nade_model.to('cpu').eval()
+        else:
+            self.nade_model = None
         try:
             self.metadata = getattr(self, 'metadata', {})
         except Exception:
@@ -58,6 +67,16 @@ class TrainEnv(gym.Env):
         high = np.full((4,), 1.0, dtype=np.float32)
 
         self.terrain_action_edges = [np.linspace(low[d], high[d], num=11) for d in range(low.shape[0])]
+        D = 4
+        grids = np.meshgrid(*[np.arange(10) for _ in range(D)], indexing='ij')
+        bins_flat = np.stack([g.reshape(-1) for g in grids], axis=1).astype(np.int64)
+        num_actions = bins_flat.shape[0]
+        centers = np.zeros((num_actions, D), dtype=np.float32)
+        for d in range(D):
+            e = self.terrain_action_edges[d]
+            b_idx = bins_flat[:, d]
+            centers[:, d] = 0.5 * (e[b_idx] + e[b_idx + 1])
+        self.candidates_arr = centers
 
         self.max_episode_steps = max_episode_steps
         self._step_count = 0
@@ -70,7 +89,7 @@ class TrainEnv(gym.Env):
             if k not in ['success', 'failed']:
                 self.trainer.reward_scales[k] = float(self.trainer.reward_scales[k]) / self.terrain_decimation
         # internal counters and current terrain action
-        self._sim_since_terrain = self.total_sim_steps
+        self._sim_since_terrain = 0
         self._current_terrain_action = np.zeros(self.terrain_action_shape, dtype=np.float32)
         self.trainer.terrain_changer.last_action = self._current_terrain_action.copy()
 
@@ -138,14 +157,27 @@ class TrainEnv(gym.Env):
         # If it's time to update terrain, sample and apply a new terrain action
         sampled_terrain = False
         if self._sim_since_terrain >= self.total_sim_steps:
-            bins = np.random.randint(0, 10, size=self.terrain_action_shape)
-
-            centers = np.zeros(self.terrain_action_shape, dtype=np.float32)
-            flat_bins = np.asarray(bins).reshape(-1)
-            for d in range(flat_bins.shape[0]):
-                b = int(flat_bins[d])
-                e = self.terrain_action_edges[d]
-                centers.flat[d] = 0.5 * (e[b] + e[b + 1])
+            if not self.nade:
+                bins = np.random.randint(0, 10, size=self.terrain_action_shape)
+                centers = np.zeros(self.terrain_action_shape, dtype=np.float32)
+                flat_bins = np.asarray(bins).reshape(-1)
+                for d in range(flat_bins.shape[0]):
+                    b = int(flat_bins[d])
+                    e = self.terrain_action_edges[d]
+                    centers.flat[d] = 0.5 * (e[b] + e[b + 1])
+            else:
+                with torch.no_grad():
+                    terrain_obs = self.trainer.get_terrain_observation().astype(np.float32)
+                    t_obs = torch.from_numpy(terrain_obs.astype(np.float32)).unsqueeze(0).repeat(self.candidates_arr.shape[0], 1)
+                    t_act = torch.from_numpy(np.asarray(self.candidates_arr, dtype=np.float32))
+                    t_in = torch.cat([t_obs, t_act], dim=1)
+                    t_out = self.nade_model(t_in)
+                    criticality = torch.nn.functional.softmax(t_out, dim=1)[:, 1].squeeze().cpu().numpy()
+                    if np.max(criticality) > 3e-1:
+                        idx = int(np.argmax(criticality))
+                    else:
+                        idx = np.random.randint(0, self.candidates_arr.shape[0])
+                    centers = np.asarray(self.candidates_arr[idx], dtype=np.float32)
 
             self._current_terrain_action = centers
             # apply terrain action

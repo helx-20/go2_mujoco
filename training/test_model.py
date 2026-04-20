@@ -203,7 +203,7 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--controller_path', type=str, default='training/model3/best/best_model.zip.policy.pt', help='Path to SB3 .zip or .pt file containing the trained policy')
+    parser.add_argument('--controller_path', type=str, default='training/models/run1/best/best_model.zip.policy.pt', help='Path to SB3 .zip or .pt file containing the trained policy')
     parser.add_argument('--worker_id', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=500)
     parser.add_argument('--max_steps', type=int, default=40)

@@ -35,13 +35,13 @@ logging.getLogger("gym").setLevel(logging.ERROR)
 logging.getLogger("gymnasium").setLevel(logging.ERROR)
 
 
-def make_env_fn(warmup_policy, max_episode_steps):
+def make_env_fn(warmup_policy, max_episode_steps=1000, nade=False, nade_model_path=None):
     def _thunk():
         # Create a lightweight dummy policy to satisfy TestEnv/Go2Controller
         config_file_path = "go2_training.yaml"
         terrain_cfg = "terrain_config.yaml"
         trainer = TestEnv(policy=warmup_policy, config_file_path=config_file_path, terrain_config_file=terrain_cfg)
-        env = TrainEnv(trainer=trainer, max_episode_steps=max_episode_steps)
+        env = TrainEnv(trainer=trainer, max_episode_steps=max_episode_steps, nade=nade, nade_model_path=nade_model_path)
         return Monitor(env)
 
     return _thunk
@@ -57,17 +57,22 @@ def main():
     parser.add_argument('--log_interval', type=int, default=20000, help='Timesteps between simple stdout progress prints')
     parser.add_argument('--eval_freq', type=int, default=20000, help='Timesteps between evaluations')
     parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
-    parser.add_argument('--tensorboard_log', type=str, default='training/logs', help='TensorBoard log dir')
+    parser.add_argument('--tensorboard_log', type=str, default=None, help='TensorBoard log dir')
     parser.add_argument('--out', type=str, default='training/models/')
-    parser.add_argument('--run_name', type=str, default='run3')
-    parser.add_argument('--learning_rate', type=float, default=1e-5)
-    parser.add_argument('--ent_coef', type=float, default=0.0)
-    parser.add_argument('--n_steps', type=int, default=512)
-    parser.add_argument('--batch_size', type=int, default=8192)
+    parser.add_argument('--run_name', type=str, default='run1')
+    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--ent_coef', type=float, default=0.01)
+    parser.add_argument('--n_steps', type=int, default=256)
+    parser.add_argument('--batch_size', type=int, default=4096)
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize policy (default uses training/models/actor_init.zip)')
+    parser.add_argument('--nade', action='store_true', help='Whether to use NADE policy architecture (default: False)')
+    parser.add_argument('--nade_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to NADE policy model (used if --nade is set)')
     args = parser.parse_args()
     args.out = os.path.join(args.out, args.run_name)
+    if not args.tensorboard_log:
+        args.tensorboard_log = os.path.join(args.out, 'logs')
+    print(args)
 
     os.makedirs(args.out, exist_ok=True)
 
@@ -95,7 +100,7 @@ def main():
     # create envs with rendering disabled by default
     wrapper = PolicyOnlyWrapper(sb3_pretrain_model.policy.mlp_extractor.policy_net.to('cpu').eval(), sb3_pretrain_model.policy.action_net.to('cpu').eval()).cpu()
     
-    env_fns = [make_env_fn(wrapper, args.max_steps) for _ in range(args.num_envs)]
+    env_fns = [make_env_fn(wrapper, args.max_steps, args.nade, args.nade_model_path) for _ in range(args.num_envs)]
     if args.num_envs == 1:
         vec_env = DummyVecEnv(env_fns)
     else:
@@ -325,10 +330,9 @@ def main():
         """Eval callback that runs episodes using `evaluate_policy(policy, ...)`.
         Saves best model to `best_model_save_path` when mean reward improves.
         """
-        def __init__(self, best_model_save_path, log_path=None, n_eval_episodes=5, eval_freq=10000, verbose=1):
+        def __init__(self, best_model_save_path, n_eval_episodes=5, eval_freq=10000, verbose=1):
             super().__init__(verbose)
             self.best_model_save_path = best_model_save_path
-            self.log_path = log_path
             self.n_eval_episodes = int(n_eval_episodes)
             self.eval_freq = int(eval_freq)
             self.best_mean_reward = -float('inf')
@@ -371,11 +375,12 @@ def main():
                 except Exception as e:
                     if self.verbose:
                         print(f'[PolicyNetEval] failed to save model: {e}')
+            
+            safe_model_save(self.model, os.path.join(self.best_model_save_path, f'model_ep{self.num_timesteps}.zip'), verbose=self.verbose)
 
             return True
 
     eval_callback = PolicyNetEvalCallback(best_model_save_path=os.path.join(args.out, 'best'),
-                                         log_path=os.path.join(args.out, 'eval_logs'),
                                          n_eval_episodes=int(args.n_eval_episodes), eval_freq=int(args.eval_freq),
                                          verbose=1)
 
