@@ -93,7 +93,7 @@ def run(args):
     policy_net.eval()
     action_net.eval()
 
-    wrapper = PolicyOnlyWrapper(policy_net, action_net).cpu()
+    safe_wrapper = PolicyOnlyWrapper(policy_net, action_net).cpu()
     # example = torch.zeros((1, 48), dtype=torch.float32)
     # try:
     #     traced = torch.jit.trace(wrapper, example, check_trace=False)
@@ -104,7 +104,16 @@ def run(args):
     # except Exception as e:
     #     print('Failed to trace policy wrapper:', e)
 
-    trainer = TestEnv(policy=wrapper, config_file_path=config_file_path, terrain_config_file=terrain_cfg)
+    from criticality.utils.criticality_model import SimpleClassifier
+    criticality_model = SimpleClassifier(input_dim=56)
+    criticality_model.load_state_dict(torch.load('criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', map_location='cpu'))
+    criticality_model.to('cpu').eval()
+
+    from stable_baselines3 import PPO as SB3PPO
+    sb3_pretrain_model = SB3PPO.load('training/models/actor_init.zip', device='cpu')
+    pretrain_wrapper = PolicyOnlyWrapper(sb3_pretrain_model.policy.mlp_extractor.policy_net.to('cpu').eval(), sb3_pretrain_model.policy.action_net.to('cpu').eval()).cpu()
+
+    trainer = TestEnv(policy=pretrain_wrapper, safe_policy=safe_wrapper, config_file_path=config_file_path, terrain_config_file=terrain_cfg, criticality_model=criticality_model)
     env = TerrainGymEnv(trainer, max_episode_steps=args.max_steps)
 
     n = args.episodes
@@ -203,7 +212,7 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--controller_path', type=str, default='training/models/run1/best/best_model.zip.policy.pt', help='Path to SB3 .zip or .pt file containing the trained policy')
+    parser.add_argument('--controller_path', type=str, default='training/models/run1/best/model_ep160000.policy.pt', help='Path to SB3 .zip or .pt file containing the trained policy')
     parser.add_argument('--worker_id', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=500)
     parser.add_argument('--max_steps', type=int, default=40)

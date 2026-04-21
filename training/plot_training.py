@@ -210,6 +210,15 @@ def plot_logs(progress_csv: Optional[str], out: str, smooth: int = 1, show: bool
         if handles:
             ax.legend(loc='best')
 
+    # Use scientific notation on x-axis for all visible axes
+    for ax in axes:
+        if not getattr(ax, 'get_visible', lambda: True)():
+            continue
+        try:
+            ax.ticklabel_format(style='sci', axis='x', scilimits=(0, 0))
+        except Exception:
+            pass
+
     if not plotted_any:
         print('No suitable data found to plot. Checked:', progress_csv)
 
@@ -221,7 +230,7 @@ def plot_logs(progress_csv: Optional[str], out: str, smooth: int = 1, show: bool
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--dir', type=str, default='training/logs/run')
+    p.add_argument('--dir', type=str, default='training/models/run1/logs/run1')
     p.add_argument('--progress-csv', type=str, default='progress.csv', help='Direct path to a progress CSV (preferred)')
     p.add_argument('--out', type=str, default='training_plot.png', help='Output image path')
     p.add_argument('--smooth', type=int, default=10, help='Moving-average window for smoothing')

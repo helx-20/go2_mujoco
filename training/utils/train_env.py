@@ -34,19 +34,14 @@ class TrainEnv(gym.Env):
     Reward: terrain reward (collision/fall)
     """
 
-    def __init__(self, trainer: TestEnv, max_episode_steps: int = 1000, nade=False, nade_model_path=None):
+    def __init__(self, trainer: TestEnv, max_episode_steps: int = 1000, nade=False, criticality_model=None):
         super().__init__()
         self.trainer = trainer
         # Compatibility with Gymnasium / Stable-Baselines3 wrappers
         self.render_mode = None
         self.nade = nade
-        if self.nade:
-            from criticality.utils.criticality_model import SimpleClassifier
-            self.nade_model = SimpleClassifier(input_dim=56)
-            self.nade_model.load_state_dict(torch.load(nade_model_path, map_location='cpu'))
-            self.nade_model.to('cpu').eval()
-        else:
-            self.nade_model = None
+        self.criticality_model = criticality_model
+
         try:
             self.metadata = getattr(self, 'metadata', {})
         except Exception:
@@ -92,12 +87,13 @@ class TrainEnv(gym.Env):
         self._sim_since_terrain = 0
         self._current_terrain_action = np.zeros(self.terrain_action_shape, dtype=np.float32)
         self.trainer.terrain_changer.last_action = self._current_terrain_action.copy()
+        self._controller_normal_action = np.zeros_like(self.action_space.shape, dtype=np.float32)
+        self._current_criticality = 0.0
 
     def reset(self, *, seed=None, options=None):
         res = self.trainer.reset()
         self.trainer.go2_controller.cmd = self.trainer.go2_controller.update_command(self.trainer.data, self.trainer.go2_controller.cmd, self.trainer.go2_controller.heading_stiffness, self.trainer.go2_controller.heading_target, self.trainer.go2_controller.heading_command)
         obs = self.trainer.go2_controller.get_observation(self.trainer.data).astype(np.float32)
-        # obs = np.concatenate([res[:36], self.trainer.go2_controller.action_policy_prev], axis=0)
         info = {}
 
         self._step_count = 0
@@ -105,11 +101,17 @@ class TrainEnv(gym.Env):
         self._sim_since_terrain = 0 # self.total_sim_steps
         self._current_terrain_action = np.zeros(self.terrain_action_shape, dtype=np.float32)
         self.trainer.terrain_changer.last_action = self._current_terrain_action.copy()
+        self._controller_normal_action = np.zeros_like(self.action_space.shape, dtype=np.float32)
+        self._current_criticality = 0.0
         return obs, info
 
     def step(self, controller_action) -> Tuple[np.ndarray, float, bool, bool, dict]:
         # Ensure arrays
         controller_action = np.asarray(controller_action, dtype=np.float32)
+
+        # If any candidate terrain action is predicted to be not critical, override the controller action with the normal (non-policy) action
+        if self._current_criticality <= self.trainer.critical_threshold:
+            controller_action = self._controller_normal_action.copy()
 
         # Keep the controller's recorded previous policy in sync with the
         # externally provided controller_action so observations match.
@@ -157,28 +159,31 @@ class TrainEnv(gym.Env):
         # If it's time to update terrain, sample and apply a new terrain action
         sampled_terrain = False
         if self._sim_since_terrain >= self.total_sim_steps:
-            if not self.nade:
-                bins = np.random.randint(0, 10, size=self.terrain_action_shape)
-                centers = np.zeros(self.terrain_action_shape, dtype=np.float32)
-                flat_bins = np.asarray(bins).reshape(-1)
-                for d in range(flat_bins.shape[0]):
-                    b = int(flat_bins[d])
-                    e = self.terrain_action_edges[d]
-                    centers.flat[d] = 0.5 * (e[b] + e[b + 1])
-            else:
+            # compute criticality of all candidate terrain actions
+            if self.criticality_model is not None:
                 with torch.no_grad():
                     terrain_obs = self.trainer.get_terrain_observation().astype(np.float32)
                     t_obs = torch.from_numpy(terrain_obs.astype(np.float32)).unsqueeze(0).repeat(self.candidates_arr.shape[0], 1)
                     t_act = torch.from_numpy(np.asarray(self.candidates_arr, dtype=np.float32))
                     t_in = torch.cat([t_obs, t_act], dim=1)
-                    t_out = self.nade_model(t_in)
+                    t_out = self.criticality_model(t_in)
                     criticality = torch.nn.functional.softmax(t_out, dim=1)[:, 1].squeeze().cpu().numpy()
-                    if np.max(criticality) > 3e-1:
-                        idx = int(np.argmax(criticality))
-                    else:
-                        idx = np.random.randint(0, self.candidates_arr.shape[0])
-                    centers = np.asarray(self.candidates_arr[idx], dtype=np.float32)
+            else:
+                criticality = np.zeros((self.candidates_arr.shape[0],), dtype=np.float32)
 
+            # select terrain action
+            if not self.nade:
+                idx = np.random.randint(0, self.candidates_arr.shape[0])
+            else:
+                if np.max(criticality) > 3e-1:
+                    idx = int(np.argmax(criticality))
+                else:
+                    idx = np.random.randint(0, self.candidates_arr.shape[0])
+
+            self._current_criticality = float(criticality[idx])
+
+            # store current terrain action
+            centers = np.asarray(self.candidates_arr[idx], dtype=np.float32)
             self._current_terrain_action = centers
             # apply terrain action
             try:
@@ -226,6 +231,8 @@ class TrainEnv(gym.Env):
 
         info['success'] = info_success
         reward = float(total_reward) + float(success_reward)
+
+        self._controller_normal_action = self.trainer.go2_controller.policy(torch.tensor(next_obs)).detach().cpu().numpy()
 
         return next_obs, float(reward), bool(terminated), bool(truncated), info
 

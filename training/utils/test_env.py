@@ -17,6 +17,7 @@ import mujoco.viewer
 import time
 from deploy_mujoco.terrain_params import TerrainChanger
 import inspect
+import torch
 
 
 def safe_call(func, *args, **kwargs):
@@ -41,11 +42,32 @@ class TestEnv:
         policy,
         config_file_path,
         terrain_config_file,
+        safe_policy=None,
+        criticality_model=None,
+        critical_threshold=0.5,
     ):
 
         from training.utils.go2_controller_test import Go2Controller
 
         self.go2_controller = Go2Controller(config_file_path, policy)
+        if safe_policy is not None:
+            self.safe_controller = Go2Controller(config_file_path, safe_policy)
+        else:
+            self.safe_controller = Go2Controller(config_file_path, policy)
+        self.criticality_model = criticality_model
+        self.critical_threshold = critical_threshold
+
+        self.terrain_action_edges = [np.linspace(-1, 1, num=11) for d in range(4)]
+        D = 4
+        grids = np.meshgrid(*[np.arange(10) for _ in range(D)], indexing='ij')
+        bins_flat = np.stack([g.reshape(-1) for g in grids], axis=1).astype(np.int64)
+        num_actions = bins_flat.shape[0]
+        centers = np.zeros((num_actions, D), dtype=np.float32)
+        for d in range(D):
+            e = self.terrain_action_edges[d]
+            b_idx = bins_flat[:, d]
+            centers[:, d] = 0.5 * (e[b_idx] + e[b_idx + 1])
+        self.candidates_arr = centers
 
         # Load Go2 controller config
         with open(f"{os.path.dirname(os.path.realpath(__file__))}/{config_file_path}", "r", encoding='utf-8') as f:
@@ -250,6 +272,28 @@ class TestEnv:
 
         total_sim_steps = int(self.terrain_decimation * self.control_decimation)
 
+        # compute criticality of all candidate terrain actions
+        # if self.criticality_model is not None:
+        #     with torch.no_grad():
+        #         terrain_obs = self.get_terrain_observation().astype(np.float32)
+        #         t_obs = torch.from_numpy(terrain_obs.astype(np.float32)).unsqueeze(0).repeat(self.candidates_arr.shape[0], 1)
+        #         t_act = torch.from_numpy(np.asarray(self.candidates_arr, dtype=np.float32))
+        #         t_in = torch.cat([t_obs, t_act], dim=1)
+        #         t_out = self.criticality_model(t_in)
+        #         criticality = torch.nn.functional.softmax(t_out, dim=1)[:, 1].squeeze().cpu().numpy()
+        # else:
+        #     criticality = np.zeros((self.candidates_arr.shape[0],), dtype=np.float32)
+
+        if self.criticality_model is not None:
+            with torch.no_grad():
+                terrain_obs = self.get_terrain_observation().astype(np.float32)
+                t_obs = torch.from_numpy(terrain_obs.astype(np.float32)).unsqueeze(0)
+                t_in = torch.cat([t_obs, torch.tensor(terrain_action).unsqueeze(0)], dim=1)
+                t_out = self.criticality_model(t_in)
+                current_criticality = torch.nn.functional.softmax(t_out, dim=1)[:, 1].squeeze().cpu().numpy()
+        else:
+            current_criticality = 0
+
         # run robot controller with zero-order hold on tau
         target_dof_pos = self.go2_controller.default_angles.copy()
         for sim_i in range(total_sim_steps):
@@ -257,7 +301,10 @@ class TestEnv:
             step_start = time.time()
             # at control boundaries compute new target and tau
             if sim_i % int(self.control_decimation) == 0:
-                target_dof_pos = safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
+                if current_criticality > self.critical_threshold:
+                    target_dof_pos = safe_call(self.safe_controller.compute_action, d=self.data, counter=self.robot_counter)
+                else:
+                    target_dof_pos = safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
                 # target_dof_pos = self.go2_controller.compute_action(self.data)
             try:
                 num_j = int(getattr(self.go2_controller, 'num_actions', 12))

@@ -35,13 +35,13 @@ logging.getLogger("gym").setLevel(logging.ERROR)
 logging.getLogger("gymnasium").setLevel(logging.ERROR)
 
 
-def make_env_fn(warmup_policy, max_episode_steps=1000, nade=False, nade_model_path=None):
+def make_env_fn(normal_policy, max_episode_steps=1000, nade=False, criticality_model=None, critical_threshold=0.5):
     def _thunk():
         # Create a lightweight dummy policy to satisfy TestEnv/Go2Controller
         config_file_path = "go2_training.yaml"
         terrain_cfg = "terrain_config.yaml"
-        trainer = TestEnv(policy=warmup_policy, config_file_path=config_file_path, terrain_config_file=terrain_cfg)
-        env = TrainEnv(trainer=trainer, max_episode_steps=max_episode_steps, nade=nade, nade_model_path=nade_model_path)
+        trainer = TestEnv(policy=normal_policy, config_file_path=config_file_path, terrain_config_file=terrain_cfg, critical_threshold=critical_threshold)
+        env = TrainEnv(trainer=trainer, max_episode_steps=max_episode_steps, nade=nade, criticality_model=criticality_model)
         return Monitor(env)
 
     return _thunk
@@ -59,15 +59,17 @@ def main():
     parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
     parser.add_argument('--tensorboard_log', type=str, default=None, help='TensorBoard log dir')
     parser.add_argument('--out', type=str, default='training/models/')
-    parser.add_argument('--run_name', type=str, default='run1')
+    parser.add_argument('--run_name', type=str, default='run2')
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--ent_coef', type=float, default=0.01)
     parser.add_argument('--n_steps', type=int, default=256)
     parser.add_argument('--batch_size', type=int, default=4096)
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
-                        help='Path to a pretrained PyTorch model or SB3 .zip to initialize policy (default uses training/models/actor_init.zip)')
+                        help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
     parser.add_argument('--nade', action='store_true', help='Whether to use NADE policy architecture (default: False)')
-    parser.add_argument('--nade_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to NADE policy model (used if --nade is set)')
+    parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
+    parser.add_argument('--critical_threshold', type=float, default=0.3, help='Criticality threshold (default: 0.5)')
+    parser.add_argument('--train_value_net_only', action='store_true', help='Whether to train only the value network (default: False, trains both policy and value)')
     args = parser.parse_args()
     args.out = os.path.join(args.out, args.run_name)
     if not args.tensorboard_log:
@@ -80,7 +82,7 @@ def main():
     # We will always create a fresh PPO model below and copy weights into it to avoid carrying over
     # stale internal training state (rollout buffer, optim state, etc.) from the checkpoint.
     sb3_pretrain_model = None
-    if args.pretrain and os.path.isfile(args.pretrain) and args.pretrain.endswith('.zip'):
+    if args.pretrain.endswith('.zip'):
         from stable_baselines3 import PPO as SB3PPO
         print('Found SB3 pretrained .zip at', args.pretrain, '- will map its policy into a fresh model')
         sb3_pretrain_model = SB3PPO.load(args.pretrain, device='cpu')
@@ -98,9 +100,15 @@ def main():
         
     # create vec env
     # create envs with rendering disabled by default
-    wrapper = PolicyOnlyWrapper(sb3_pretrain_model.policy.mlp_extractor.policy_net.to('cpu').eval(), sb3_pretrain_model.policy.action_net.to('cpu').eval()).cpu()
+    pretrain_wrapper = PolicyOnlyWrapper(sb3_pretrain_model.policy.mlp_extractor.policy_net.to('cpu').eval(), sb3_pretrain_model.policy.action_net.to('cpu').eval()).cpu()
+
+    # load criticality model
+    from criticality.utils.criticality_model import SimpleClassifier
+    criticality_model = SimpleClassifier(input_dim=56)
+    criticality_model.load_state_dict(torch.load(args.criticality_model_path, map_location='cpu'))
+    criticality_model.to('cpu').eval()
     
-    env_fns = [make_env_fn(wrapper, args.max_steps, args.nade, args.nade_model_path) for _ in range(args.num_envs)]
+    env_fns = [make_env_fn(pretrain_wrapper, args.max_steps, args.nade, criticality_model, args.critical_threshold) for _ in range(args.num_envs)]
     if args.num_envs == 1:
         vec_env = DummyVecEnv(env_fns)
     else:
@@ -119,67 +127,55 @@ def main():
         batch_size=int(args.batch_size),
     )
 
-    if args.pretrain and os.path.isfile(args.pretrain):
-        # prefer already-loaded sb3_pretrain_model if available
-        sb3_model = sb3_pretrain_model if sb3_pretrain_model is not None else __import__('stable_baselines3').PPO.load(args.pretrain, device='cpu')
+    # if args.pretrain and os.path.isfile(args.pretrain):
+    #     # prefer already-loaded sb3_pretrain_model if available
+    #     sb3_model = sb3_pretrain_model if sb3_pretrain_model is not None else __import__('stable_baselines3').PPO.load(args.pretrain, device='cpu')
 
-        # Source and destination state dicts
-        src_sd = sb3_model.policy.state_dict()
-        policy_sd = model.policy.state_dict()
+    #     # Source and destination state dicts
+    #     src_sd = sb3_model.policy.state_dict()
+    #     policy_sd = model.policy.state_dict()
 
-        matched = {}
-        used_src = set()
+    #     matched = {}
+    #     used_src = set()
 
-        # 1) Exact name + shape matches
-        for src_k, src_v in src_sd.items():
-            if src_k in policy_sd and tuple(policy_sd[src_k].shape) == tuple(src_v.shape):
-                policy_sd[src_k].copy_(src_v)
-                matched[src_k] = src_k
-                used_src.add(src_k)
+    #     # 1) Exact name + shape matches
+    #     for src_k, src_v in src_sd.items():
+    #         if src_k in policy_sd and tuple(policy_sd[src_k].shape) == tuple(src_v.shape):
+    #             policy_sd[src_k].copy_(src_v)
+    #             matched[src_k] = src_k
+    #             used_src.add(src_k)
 
-        # 2) Suffix (last token) + shape matches for remaining dst keys
-        for dst_k in list(policy_sd.keys()):
-            if dst_k in matched:
-                continue
-            dst_shape = tuple(policy_sd[dst_k].shape)
-            dst_suffix = dst_k.split('.')[-1]
-            for src_k, src_v in src_sd.items():
-                if src_k in used_src:
-                    continue
-                if src_k.split('.')[-1] == dst_suffix and tuple(src_v.shape) == dst_shape:
-                    policy_sd[dst_k].copy_(src_v)
-                    matched[dst_k] = src_k
-                    used_src.add(src_k)
-                    break
+    #     # 2) Suffix (last token) + shape matches for remaining dst keys
+    #     for dst_k in list(policy_sd.keys()):
+    #         if dst_k in matched:
+    #             continue
+    #         dst_shape = tuple(policy_sd[dst_k].shape)
+    #         dst_suffix = dst_k.split('.')[-1]
+    #         for src_k, src_v in src_sd.items():
+    #             if src_k in used_src:
+    #                 continue
+    #             if src_k.split('.')[-1] == dst_suffix and tuple(src_v.shape) == dst_shape:
+    #                 policy_sd[dst_k].copy_(src_v)
+    #                 matched[dst_k] = src_k
+    #                 used_src.add(src_k)
+    #                 break
 
-        # 3) Shape-only matching for any remaining dst keys (first-fit)
-        for dst_k in list(policy_sd.keys()):
-            if dst_k in matched:
-                continue
-            dst_shape = tuple(policy_sd[dst_k].shape)
-            for src_k, src_v in src_sd.items():
-                if src_k in used_src:
-                    continue
-                if tuple(src_v.shape) == dst_shape:
-                    policy_sd[dst_k].copy_(src_v)
-                    matched[dst_k] = src_k
-                    used_src.add(src_k)
-                    break
+    #     # 3) Shape-only matching for any remaining dst keys (first-fit)
+    #     for dst_k in list(policy_sd.keys()):
+    #         if dst_k in matched:
+    #             continue
+    #         dst_shape = tuple(policy_sd[dst_k].shape)
+    #         for src_k, src_v in src_sd.items():
+    #             if src_k in used_src:
+    #                 continue
+    #             if tuple(src_v.shape) == dst_shape:
+    #                 policy_sd[dst_k].copy_(src_v)
+    #                 matched[dst_k] = src_k
+    #                 used_src.add(src_k)
+    #                 break
 
-        model.policy.load_state_dict(policy_sd)
-        print(f'Initialized policy from {args.pretrain} — matched {len(matched)} tensors')
-
-    # Override `model.predict` to use the raw PolicyOnlyWrapper forward pass
-    try:
-        def _predict_using_wrapper(self, observation, deterministic=True):
-            out = model.policy.mlp_extractor.policy_net(observation)
-            out = model.policy.action_net(out)
-            return out, None
-
-        model.predict = types.MethodType(_predict_using_wrapper, model)
-        print('Patched model.predict to use PolicyOnlyWrapper (raw network outputs)')
-    except Exception as e:
-        print('Failed to patch model.predict:', e)
+    #     model.policy.load_state_dict(policy_sd)
+    #     print(f'Initialized policy from {args.pretrain} — matched {len(matched)} tensors')
 
     # Print chosen hyperparameters and ensure model prints some progress; set verbose and attach a simple callback
     # Ensure model.n_steps/batch_size match args and recreate rollout_buffer to expected total size
@@ -215,20 +211,20 @@ def main():
     new_logger = configure(tb_dir, ["stdout", "tensorboard", "csv"])
     model.set_logger(new_logger)
 
-    def evaluate_policy(policy, n_episodes: int = 5):
+    def evaluate_policy(safe_policy, policy=pretrain_wrapper, criticality_model=criticality_model, n_episodes: int = 5):
         config_file_path = "go2_training.yaml"
         terrain_cfg = "terrain_config.yaml"
 
-        policy_net = policy.mlp_extractor.policy_net
-        action_net = policy.action_net
+        policy_net = safe_policy.mlp_extractor.policy_net
+        action_net = safe_policy.action_net
         policy_net.to('cpu')
         action_net.to('cpu')
         policy_net.eval()
         action_net.eval()
 
-        wrapper = PolicyOnlyWrapper(policy_net, action_net).cpu()
+        safe_wrapper = PolicyOnlyWrapper(policy_net, action_net).cpu()
 
-        trainer = TestEnv(policy=wrapper, config_file_path=config_file_path, terrain_config_file=terrain_cfg)
+        trainer = TestEnv(policy=policy, safe_policy=safe_wrapper, criticality_model=criticality_model, config_file_path=config_file_path, terrain_config_file=terrain_cfg, critical_threshold=args.critical_threshold)
         env = TerrainGymEnv(trainer, max_episode_steps=args.max_steps)
 
         action_space = env.action_space
@@ -293,30 +289,18 @@ def main():
                     cleared.pop(attr, None)
 
         try:
-            model_obj.save(save_path)
+            # try to save only the policy state dict with torch
+            fb_dir = os.path.dirname(save_path)
+            if fb_dir:
+                os.makedirs(fb_dir, exist_ok=True)
+            fb_path = save_path
+            # prefer .pt for fallback
+            if not fb_path.endswith('.pt'):
+                fb_path = save_path + '.pt'
+            torch.save({'policy_state_dict': model_obj.policy.state_dict()}, fb_path)
             if verbose:
-                print(f'[safe_model_save] Saved model to {save_path}')
+                print(f'[safe_model_save] saved policy state_dict to {fb_path}')
             return True
-        except Exception as e:
-            if verbose:
-                print(f'[safe_model_save] failed to save model: {e}')
-            # Fallback: try to save only the policy state dict with torch
-            try:
-                fb_dir = os.path.dirname(save_path)
-                if fb_dir:
-                    os.makedirs(fb_dir, exist_ok=True)
-                fb_path = save_path
-                # prefer .pt for fallback
-                if not fb_path.endswith('.pt'):
-                    fb_path = save_path + '.policy.pt'
-                torch.save({'policy_state_dict': model_obj.policy.state_dict()}, fb_path)
-                if verbose:
-                    print(f'[safe_model_save] Fallback: saved policy state_dict to {fb_path}')
-                return True
-            except Exception as e2:
-                if verbose:
-                    print(f'[safe_model_save] fallback save also failed: {e2}')
-                return False
         finally:
             for attr, val in cleared.items():
                 try:
@@ -365,18 +349,14 @@ def main():
             if mean_r >= self.best_mean_reward:
                 self.best_mean_reward = mean_r
                 os.makedirs(self.best_model_save_path, exist_ok=True)
-                save_to = os.path.join(self.best_model_save_path, 'best_model.zip')
+                save_to = os.path.join(self.best_model_save_path, 'best_model.policy.pt')
                 try:
                     ok = safe_model_save(self.model, save_to, verbose=self.verbose)
-                    if ok and self.verbose:
-                        print(f'[PolicyNetEval] New best mean_reward={mean_r:.6f}, saved to {save_to}')
-                    elif not ok and self.verbose:
-                        print(f'[PolicyNetEval] failed to save model to {save_to}')
                 except Exception as e:
                     if self.verbose:
                         print(f'[PolicyNetEval] failed to save model: {e}')
             
-            safe_model_save(self.model, os.path.join(self.best_model_save_path, f'model_ep{self.num_timesteps}.zip'), verbose=self.verbose)
+            safe_model_save(self.model, os.path.join(self.best_model_save_path, f'model_ep{self.num_timesteps}.policy.pt'), verbose=self.verbose)
 
             return True
 
@@ -397,6 +377,15 @@ def main():
             return True
 
     pb_cb = ProgressPrintCallback(log_interval=args.log_interval)
+
+    if args.train_value_net_only:
+        print('Training value network only (policy network will be frozen)')
+        for p in model.policy.mlp_extractor.policy_net.parameters():
+            p.requires_grad = False
+        for p in model.policy.action_net.parameters():
+            p.requires_grad = False
+        trainable_params = [p for p in model.policy.parameters() if p.requires_grad]
+        model.policy.optimizer = torch.optim.Adam(trainable_params, lr=args.learning_rate)
 
     model.learn(total_timesteps=int(args.total_timesteps), callback=[pb_cb, eval_callback])
 
