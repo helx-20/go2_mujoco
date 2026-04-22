@@ -94,7 +94,6 @@ class TrainEnv(gym.Env):
         res = self.trainer.reset()
         self.trainer.go2_controller.cmd = self.trainer.go2_controller.update_command(self.trainer.data, self.trainer.go2_controller.cmd, self.trainer.go2_controller.heading_stiffness, self.trainer.go2_controller.heading_target, self.trainer.go2_controller.heading_command)
         obs = self.trainer.go2_controller.get_observation(self.trainer.data).astype(np.float32)
-        info = {}
 
         self._step_count = 0
         # reset timing counters so terrain will be sampled on first step
@@ -103,6 +102,7 @@ class TrainEnv(gym.Env):
         self.trainer.terrain_changer.last_action = self._current_terrain_action.copy()
         self._controller_normal_action = np.zeros_like(self.action_space.shape, dtype=np.float32)
         self._current_criticality = 0.0
+        info = {'use_safe_policy': bool(self._current_criticality > self.trainer.critical_threshold)}
         return obs, info
 
     def step(self, controller_action) -> Tuple[np.ndarray, float, bool, bool, dict]:
@@ -233,6 +233,7 @@ class TrainEnv(gym.Env):
         reward = float(total_reward) + float(success_reward)
 
         self._controller_normal_action = self.trainer.go2_controller.policy(torch.tensor(next_obs)).detach().cpu().numpy()
+        info['use_safe_policy'] = bool(self._current_criticality > self.trainer.critical_threshold)
 
         return next_obs, float(reward), bool(terminated), bool(truncated), info
 

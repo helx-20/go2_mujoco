@@ -17,13 +17,15 @@ if ROOT not in sys.path:
 
 import yaml
 import numpy as np
-from stable_baselines3 import PPO
+# from stable_baselines3 import PPO
+from training.utils.ppo import PPO
 import types
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.logger import configure
-from stable_baselines3.common.buffers import RolloutBuffer
+# from stable_baselines3.common.buffers import RolloutBuffer
+from training.utils.buffers import RolloutBuffer
 from training.utils.train_env import TrainEnv
 from training.utils.test_env import TestEnv, TerrainGymEnv
 
@@ -48,7 +50,7 @@ def make_env_fn(normal_policy, max_episode_steps=1000, nade=False, criticality_m
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--total_timesteps', type=int, default=3000000)
+    parser.add_argument('--total_timesteps', type=int, default=5000000)
     parser.add_argument('--num_envs', type=int, default=16)
     parser.add_argument('--sim_device', type=str, default='cpu')
     parser.add_argument('--rl_device', type=str, default='cpu')
@@ -62,13 +64,13 @@ def main():
     parser.add_argument('--run_name', type=str, default='run2')
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--ent_coef', type=float, default=0.01)
-    parser.add_argument('--n_steps', type=int, default=256)
-    parser.add_argument('--batch_size', type=int, default=4096)
+    parser.add_argument('--n_steps', type=int, default=512)
+    parser.add_argument('--batch_size', type=int, default=8192)
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
     parser.add_argument('--nade', action='store_true', help='Whether to use NADE policy architecture (default: False)')
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
-    parser.add_argument('--critical_threshold', type=float, default=0.3, help='Criticality threshold (default: 0.5)')
+    parser.add_argument('--critical_threshold', type=float, default=0.5, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--train_value_net_only', action='store_true', help='Whether to train only the value network (default: False, trains both policy and value)')
     args = parser.parse_args()
     args.out = os.path.join(args.out, args.run_name)

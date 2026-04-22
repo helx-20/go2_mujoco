@@ -49,6 +49,16 @@ def make_env_fn(trainer, max_episode_steps=1000):
 
     return _thunk
 
+class PolicyOnlyWrapper(torch.nn.Module):
+    def __init__(self, net_pi, act_net):
+        super().__init__()
+        self.net_pi = net_pi
+        self.act_net = act_net
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        latent = self.net_pi(x)
+        actions = self.act_net(latent)
+        return actions
 
 def run(args):
     # go2_config_file: (foldername, cfg filename) relative to deploy_mujoco
@@ -77,17 +87,6 @@ def run(args):
     # the value_net and other modules.
     policy_net = sb3.policy.mlp_extractor.policy_net
     action_net = sb3.policy.action_net
-    class PolicyOnlyWrapper(torch.nn.Module):
-        def __init__(self, net_pi, act_net):
-            super().__init__()
-            self.net_pi = net_pi
-            self.act_net = act_net
-
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            latent = self.net_pi(x)
-            actions = self.act_net(latent)
-            return actions
-
     policy_net.to('cpu')
     action_net.to('cpu')
     policy_net.eval()
@@ -113,7 +112,7 @@ def run(args):
     sb3_pretrain_model = SB3PPO.load('training/models/actor_init.zip', device='cpu')
     pretrain_wrapper = PolicyOnlyWrapper(sb3_pretrain_model.policy.mlp_extractor.policy_net.to('cpu').eval(), sb3_pretrain_model.policy.action_net.to('cpu').eval()).cpu()
 
-    trainer = TestEnv(policy=pretrain_wrapper, safe_policy=safe_wrapper, config_file_path=config_file_path, terrain_config_file=terrain_cfg, criticality_model=criticality_model)
+    trainer = TestEnv(policy=pretrain_wrapper, safe_policy=safe_wrapper, config_file_path=config_file_path, terrain_config_file=terrain_cfg, criticality_model=criticality_model, critical_threshold=args.critical_threshold)
     env = TerrainGymEnv(trainer, max_episode_steps=args.max_steps)
 
     n = args.episodes
@@ -212,7 +211,8 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--controller_path', type=str, default='training/models/run1/best/model_ep160000.policy.pt', help='Path to SB3 .zip or .pt file containing the trained policy')
+    parser.add_argument('--controller_path', type=str, default='training/models/run_nade1/best/model_ep1120000.policy.pt', help='Path to SB3 .zip or .pt file containing the trained policy')
+    parser.add_argument('--critical_threshold', type=float, default=0.5, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--worker_id', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=500)
     parser.add_argument('--max_steps', type=int, default=40)
