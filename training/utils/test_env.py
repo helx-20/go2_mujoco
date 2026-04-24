@@ -45,6 +45,7 @@ class TestEnv:
         safe_policy=None,
         criticality_model=None,
         critical_threshold=0.5,
+        collect_training_data=False,
     ):
 
         from training.utils.go2_controller_test import Go2Controller
@@ -56,6 +57,8 @@ class TestEnv:
             self.safe_controller = Go2Controller(config_file_path, policy)
         self.criticality_model = criticality_model
         self.critical_threshold = critical_threshold
+        self.collect_training_data = collect_training_data
+        self.training_data = {'obs': [], 'actions': [], 'rewards': [], 'dones': [], 'useful': [], 'weights': []}
 
         self.terrain_action_edges = [np.linspace(-1, 1, num=11) for d in range(4)]
         D = 4
@@ -170,11 +173,17 @@ class TestEnv:
             if k not in ['success', 'failed']:
                 self.reward_scales[k] = float(self.reward_scales[k]) * dt_scale
 
+        if self.collect_training_data:
+            for k in list(self.reward_scales.keys()):
+                if k not in ['success', 'failed']:
+                    self.reward_scales[k] = float(self.reward_scales[k]) / self.terrain_decimation
+
     def reset(self):
         """Reset physics and counters. Returns initial observation (robot-centric).
 
         Accept seed/options for now but accept them to be compatible with Gym API
         """
+        self.training_data = {'obs': [], 'actions': [], 'rewards': [], 'dones': [], 'useful': [], 'weights': []}
         # ignore seed/options for now but accept them to be compatible with Gym API
         mujoco.mj_resetData(self.model, self.data)
         # recreate terrain_changer with fresh data reference
@@ -272,18 +281,6 @@ class TestEnv:
 
         total_sim_steps = int(self.terrain_decimation * self.control_decimation)
 
-        # compute criticality of all candidate terrain actions
-        # if self.criticality_model is not None:
-        #     with torch.no_grad():
-        #         terrain_obs = self.get_terrain_observation().astype(np.float32)
-        #         t_obs = torch.from_numpy(terrain_obs.astype(np.float32)).unsqueeze(0).repeat(self.candidates_arr.shape[0], 1)
-        #         t_act = torch.from_numpy(np.asarray(self.candidates_arr, dtype=np.float32))
-        #         t_in = torch.cat([t_obs, t_act], dim=1)
-        #         t_out = self.criticality_model(t_in)
-        #         criticality = torch.nn.functional.softmax(t_out, dim=1)[:, 1].squeeze().cpu().numpy()
-        # else:
-        #     criticality = np.zeros((self.candidates_arr.shape[0],), dtype=np.float32)
-
         if self.criticality_model is not None:
             with torch.no_grad():
                 terrain_obs = self.get_terrain_observation().astype(np.float32)
@@ -301,10 +298,28 @@ class TestEnv:
             step_start = time.time()
             # at control boundaries compute new target and tau
             if sim_i % int(self.control_decimation) == 0:
-                if current_criticality > self.critical_threshold:
-                    target_dof_pos = safe_call(self.safe_controller.compute_action, d=self.data, counter=self.robot_counter)
+                if self.collect_training_data:
+                    if current_criticality > self.critical_threshold:
+                        target_dof_pos, obs, action_policy = safe_call(self.safe_controller.compute_action_with_training_data, d=self.data, counter=self.robot_counter)
+                        useful = True
+                        # self.go2_controller.action_policy_prev[:] = self.safe_controller.action_policy_prev
+                        safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
+                    else:
+                        target_dof_pos, obs, action_policy = safe_call(self.go2_controller.compute_action_with_training_data, d=self.data, counter=self.robot_counter)
+                        useful = False
+                        self.safe_controller.action_policy_prev[:] = self.go2_controller.action_policy_prev
+                    self.training_data['obs'].append(obs)
+                    self.training_data['actions'].append(action_policy)
+                    self.training_data['useful'].append(useful)
                 else:
-                    target_dof_pos = safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
+                    if current_criticality > self.critical_threshold:
+                        target_dof_pos = safe_call(self.safe_controller.compute_action, d=self.data, counter=self.robot_counter)
+                        # self.go2_controller.action_policy_prev[:] = self.safe_controller.action_policy_prev
+                        safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
+                    else:
+                        target_dof_pos = safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
+                        self.safe_controller.action_policy_prev[:] = self.go2_controller.action_policy_prev
+                
                 # target_dof_pos = self.go2_controller.compute_action(self.data)
             try:
                 num_j = int(getattr(self.go2_controller, 'num_actions', 12))
@@ -348,6 +363,14 @@ class TestEnv:
                 time_until_next_step = self.model.opt.timestep - (time.time() - step_start)
                 if time_until_next_step > 0:
                     time.sleep(time_until_next_step)
+
+            # collect training data
+            if self.collect_training_data and (sim_i + 1) % int(self.control_decimation) == 0:
+                tmp_reward, _, tmp_done = self.compute_reward()
+                self.training_data['rewards'].append(tmp_reward)
+                self.training_data['dones'].append(tmp_done)
+                if tmp_done:
+                    break
 
         # compute terrain reward and next obs
         total_reward, reward_info, done = self.compute_reward()

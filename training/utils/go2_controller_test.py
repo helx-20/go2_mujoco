@@ -120,12 +120,31 @@ class Go2Controller:
         action_policy = self.policy(obs_tensor).squeeze()
         if isinstance(action_policy, torch.Tensor):
             action_policy = action_policy.detach().cpu().numpy()
+        action_policy = np.clip(action_policy, -4, 4)
         # model action order
         target_dof_pos = action_policy * self.action_scale + self.default_angles
         # policy action order used for next step
         self.action_policy_prev[:] = action_policy
 
         return target_dof_pos
+    
+    def compute_action_with_training_data(self, d):
+        self.cmd = self.update_command(d, self.cmd, self.heading_stiffness, self.heading_target, self.heading_command)
+        # create observation
+        obs = self.get_observation(d)
+
+        obs_tensor = torch.from_numpy(obs).unsqueeze(0)
+        # policy inference
+        action_policy = self.policy(obs_tensor).squeeze()
+        if isinstance(action_policy, torch.Tensor):
+            action_policy = action_policy.detach().cpu().numpy()
+        action_policy = np.clip(action_policy, -4, 4)
+        # model action order
+        target_dof_pos = action_policy * self.action_scale + self.default_angles
+        # policy action order used for next step
+        self.action_policy_prev[:] = action_policy
+
+        return target_dof_pos, obs, action_policy
 
     def run(self):  # 独立启动仿真运行，仿真文件路径来源于config
 

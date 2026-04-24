@@ -112,56 +112,68 @@ def run(args):
     sb3_pretrain_model = SB3PPO.load('training/models/actor_init.zip', device='cpu')
     pretrain_wrapper = PolicyOnlyWrapper(sb3_pretrain_model.policy.mlp_extractor.policy_net.to('cpu').eval(), sb3_pretrain_model.policy.action_net.to('cpu').eval()).cpu()
 
-    trainer = TestEnv(policy=pretrain_wrapper, safe_policy=safe_wrapper, config_file_path=config_file_path, terrain_config_file=terrain_cfg, criticality_model=criticality_model, critical_threshold=args.critical_threshold)
+    training_out = getattr(args, 'training_out', None)
+    if training_out is not None:
+        collect_training_data = True
+    else:
+        collect_training_data = False
+    trainer = TestEnv(policy=pretrain_wrapper, safe_policy=safe_wrapper, config_file_path=config_file_path, terrain_config_file=terrain_cfg, criticality_model=criticality_model, critical_threshold=args.critical_threshold, collect_training_data=collect_training_data)
     env = TerrainGymEnv(trainer, max_episode_steps=args.max_steps)
 
     n = args.episodes
     crashes = []
     out_path = args.out
-    crit_out = getattr(args, 'criticality_out', None)
 
     action_space = env.action_space
     # prepare discretization edges for actions: 10 bins per dimension
     low = np.asarray(action_space.low, dtype=np.float32)
     high = np.asarray(action_space.high, dtype=np.float32)
-    # avoid zero-range
-    high = np.where(high == low, low + 1.0, high)
     action_edges = [np.linspace(low[d], high[d], num=11) for d in range(low.shape[0])]
+    D = 4
+    grids = np.meshgrid(*[np.arange(10) for _ in range(D)], indexing='ij')
+    bins_flat = np.stack([g.reshape(-1) for g in grids], axis=1).astype(np.int64)
+    num_actions = bins_flat.shape[0]
+    centers = np.zeros((num_actions, D), dtype=np.float32)
+    for d in range(D):
+        e = action_edges[d]
+        b_idx = bins_flat[:, d]
+        centers[:, d] = 0.5 * (e[b_idx] + e[b_idx + 1])
+    candidates_arr = centers
 
     # global buffers for criticality training data (across episodes)
-    crit_data_all = []
+    training_data_all = {'obs': [], 'actions': [], 'rewards': [], 'dones': [], 'useful': [], 'weights': []}
 
     for i in range(n):
         obs, _ = env.reset()
         done = False
         steps = 0
-
-        # per-episode buffers
-        ep_obs = []
-        ep_actions = []
+        total_weight = 1.0
 
         while not done:
             steps += 1
-            # NDE: uniformly sample a terrain action from the environment action space
-            # sample bins uniformly
-            bins = np.random.randint(0, 10, size=action_space.shape)
-            # map bins to continuous center values
-            centers = np.zeros(action_space.shape, dtype=np.float32)
-            flat_bins = np.asarray(bins).reshape(-1)
-            for d in range(flat_bins.shape[0]):
-                b = int(flat_bins[d])
-                e = action_edges[d]
-                centers.reshape(-1)[d] = 0.5 * (e[b] + e[b+1])
-            action = centers
-            # store discrete bins as action representation
+            with torch.no_grad():
+                t_obs = torch.from_numpy(obs.astype(np.float32)).unsqueeze(0).repeat(candidates_arr.shape[0], 1)
+                t_act = torch.from_numpy(np.asarray(candidates_arr, dtype=np.float32))
+                t_in = torch.cat([t_obs, t_act], dim=1)
+                t_out = criticality_model(t_in)
+                criticality = torch.nn.functional.softmax(t_out, dim=1)[:, 1].squeeze().cpu().numpy()
+            if not args.nade:
+                idx = np.random.randint(0, candidates_arr.shape[0])
+                weight = 1.0
+            else:
+                if np.max(criticality) > 3e-1 and total_weight > 1e-4:
+                    idx = int(np.argmax(criticality))
+                    weight = float((1 / len(criticality)) / (criticality[idx] / np.sum(criticality)))
+                else:
+                    idx = np.random.randint(0, candidates_arr.shape[0])
+                    weight = 1.0
+            total_weight *= weight
+            action = candidates_arr[idx]
             action = np.asarray(action, dtype=np.float32)
-                    
-            # record observation and action for criticality dataset (obs before applying action)
-            if crit_out is not None:
-                ep_obs.append(obs)
-                ep_actions.append(action)
-
             next_obs, reward, terminated, truncated, info = env.step(action)
+            if training_out is not None:
+                while len(env.trainer.training_data['weights']) < len(env.trainer.training_data['obs']):
+                    env.trainer.training_data['weights'].append(weight)
             obs = next_obs
             done = bool(terminated) or bool(truncated) or bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
 
@@ -171,10 +183,21 @@ def run(args):
         crash_type = 'fallen' if info.get('fallen', False) else 'collided' if info.get('collided', False) else 'base_collision' if info.get('base_collision', False) else 'thigh_collision' if info.get('thigh_collision', False) else 'stuck' if info.get('stuck', False) else 'none'
         print(f"episode {i+1}/{n} steps={steps} crash={crash}")
 
-        # label and append per-episode data to global criticality buffers
-        if crit_out is not None:
-            label = int(crash)
-            crit_data_all.append({'obs': ep_obs, 'actions': ep_actions, 'label': label, 'crash_type': crash_type})
+        # label and append per-episode data to global training buffers
+        if training_out is not None:
+            ep_obs = env.trainer.training_data['obs']
+            ep_actions = env.trainer.training_data['actions']
+            ep_dones = env.trainer.training_data['dones']
+            ep_dones[-1] = True
+            ep_rewards = env.trainer.training_data['rewards']
+            ep_useful = env.trainer.training_data['useful']
+            ep_weights = env.trainer.training_data['weights']
+            training_data_all['obs'].extend(ep_obs)
+            training_data_all['actions'].extend(ep_actions)
+            training_data_all['dones'].extend(ep_dones)
+            training_data_all['rewards'].extend(ep_rewards)
+            training_data_all['useful'].extend(ep_useful)
+            training_data_all['weights'].extend(ep_weights)
 
         if (i + 1) % args.log_interval == 0:
             Mean, RHF, Val = calculate_val(crashes)
@@ -184,12 +207,12 @@ def run(args):
             if out_path:
                 np.save(os.path.join(out_path, f'nde_{args.worker_id}.npy'), np.array(crashes, dtype=np.float32))
             # also save criticality buffers periodically
-            if crit_out is not None:
+            if training_out is not None:
                 try:
-                    np.save(os.path.join(crit_out, f'nde_{args.worker_id}.npy'), np.array(crit_data_all))
-                    print(f'Wrote criticality data to {crit_out} (samples={len(crit_data_all)})')
+                    np.save(os.path.join(training_out, f'training_{args.worker_id}.npy'), np.array(training_data_all))
+                    print(f'Wrote training data to {training_out} (samples={len(training_data_all)})')
                 except Exception as e:
-                    print('Failed to save criticality data:', e)
+                    print('Failed to save training data:', e)
 
     # final stats
     Mean, RHF, Val = calculate_val(crashes)
@@ -200,28 +223,30 @@ def run(args):
     if out_path:
         np.save(os.path.join(out_path, f'nde_{args.worker_id}.npy'), np.array(crashes, dtype=np.float32))
 
-    # final save criticality data
-    if crit_out is not None:
+    # final save training data
+    if training_out is not None:
         try:
-            np.save(os.path.join(crit_out, f'nde_{args.worker_id}.npy'), np.array(crit_data_all))
-            print(f'Wrote criticality data to {crit_out} (samples={len(crit_data_all)})')
+            np.save(os.path.join(training_out, f'training_{args.worker_id}.npy'), np.array(training_data_all))
+            print(f'Wrote training data to {training_out} (samples={len(training_data_all)})')
         except Exception as e:
-            print('Failed to save criticality data:', e)
+            print('Failed to save training data:', e)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--controller_path', type=str, default='training/models/run_nade1/best/model_ep1120000.policy.pt', help='Path to SB3 .zip or .pt file containing the trained policy')
-    parser.add_argument('--critical_threshold', type=float, default=0.5, help='Criticality threshold (default: 0.5)')
+    # parser.add_argument('--controller_path', type=str, default='training/models/actor_init.zip', help='Path to SB3 .zip or .pt file containing the trained policy')
+    parser.add_argument('--controller_path', type=str, default='training/models/run_offline1_new/run_offline1_new_offline_ep50.policy.pt')
+    parser.add_argument('--critical_threshold', type=float, default=0.8, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--worker_id', type=int, default=0)
-    parser.add_argument('--episodes', type=int, default=500)
+    parser.add_argument('--episodes', type=int, default=100)
     parser.add_argument('--max_steps', type=int, default=40)
     parser.add_argument('--log_interval', type=int, default=10)
     parser.add_argument('--out', type=str, default='training/results', help='Path to save crashes numpy array')
     parser.add_argument('--save_interval', type=int, default=10, help='Save results every N episodes at log interval')
-    parser.add_argument('--criticality_out', type=str, default=None, help='Optional path to save criticality dataset (obs, actions, labels)')
+    parser.add_argument('--training_out', type=str, default=None, help='Optional path to save criticality dataset (obs, actions, labels)')
+    parser.add_argument('--nade', action='store_true')
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
-    if args.criticality_out:
-        os.makedirs(args.criticality_out, exist_ok=True)
+    if args.training_out:
+        os.makedirs(args.training_out, exist_ok=True)
     run(args)

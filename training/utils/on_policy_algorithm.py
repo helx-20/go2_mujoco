@@ -226,6 +226,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             n_steps += 1
 
             useful = np.array([infos[i].get('use_safe_policy', False) for i in range(len(infos))])
+            weights = np.array([infos[i].get('weight', 1.0) for i in range(len(infos))])
 
             self.num_timesteps += env.num_envs
 
@@ -261,6 +262,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 values,
                 log_probs,
                 useful,
+                weights,
             )
 
             self._last_obs = new_obs  # type: ignore[assignment]

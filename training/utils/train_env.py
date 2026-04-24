@@ -89,6 +89,7 @@ class TrainEnv(gym.Env):
         self.trainer.terrain_changer.last_action = self._current_terrain_action.copy()
         self._controller_normal_action = np.zeros_like(self.action_space.shape, dtype=np.float32)
         self._current_criticality = 0.0
+        self._current_weight = 1.0
 
     def reset(self, *, seed=None, options=None):
         res = self.trainer.reset()
@@ -102,7 +103,8 @@ class TrainEnv(gym.Env):
         self.trainer.terrain_changer.last_action = self._current_terrain_action.copy()
         self._controller_normal_action = np.zeros_like(self.action_space.shape, dtype=np.float32)
         self._current_criticality = 0.0
-        info = {'use_safe_policy': bool(self._current_criticality > self.trainer.critical_threshold)}
+        self._current_weight = 1.0
+        info = {'use_safe_policy': bool(self._current_criticality > self.trainer.critical_threshold), 'weight': float(self._current_weight)}
         return obs, info
 
     def step(self, controller_action) -> Tuple[np.ndarray, float, bool, bool, dict]:
@@ -174,12 +176,16 @@ class TrainEnv(gym.Env):
             # select terrain action
             if not self.nade:
                 idx = np.random.randint(0, self.candidates_arr.shape[0])
+                weight = 1.0
             else:
                 if np.max(criticality) > 3e-1:
                     idx = int(np.argmax(criticality))
+                    weight = float((1 / len(criticality)) / (criticality[idx] / np.sum(criticality)))
                 else:
                     idx = np.random.randint(0, self.candidates_arr.shape[0])
+                    weight = 1.0
 
+            self._current_weight = weight
             self._current_criticality = float(criticality[idx])
 
             # store current terrain action
@@ -234,6 +240,7 @@ class TrainEnv(gym.Env):
 
         self._controller_normal_action = self.trainer.go2_controller.policy(torch.tensor(next_obs)).detach().cpu().numpy()
         info['use_safe_policy'] = bool(self._current_criticality > self.trainer.critical_threshold)
+        info['weight'] = float(self._current_weight)
 
         return next_obs, float(reward), bool(terminated), bool(truncated), info
 

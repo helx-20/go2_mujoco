@@ -371,6 +371,7 @@ class RolloutBuffer(BaseBuffer):
     log_probs: np.ndarray
     values: np.ndarray
     useful: np.ndarray
+    weights: np.ndarray
 
     def __init__(
         self,
@@ -398,6 +399,7 @@ class RolloutBuffer(BaseBuffer):
         self.log_probs = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.advantages = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.useful = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+        self.weights = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.generator_ready = False
         super().reset()
 
@@ -447,6 +449,7 @@ class RolloutBuffer(BaseBuffer):
         value: th.Tensor,
         log_prob: th.Tensor,
         useful: np.ndarray,
+        weights: np.ndarray,
     ) -> None:
         """
         :param obs: Observation
@@ -478,6 +481,7 @@ class RolloutBuffer(BaseBuffer):
         self.values[self.pos] = value.clone().cpu().numpy().flatten()
         self.log_probs[self.pos] = log_prob.clone().cpu().numpy()
         self.useful[self.pos] = np.array(useful)
+        self.weights[self.pos] = np.array(weights)
         self.pos += 1
         if self.pos == self.buffer_size:
             self.full = True
@@ -495,6 +499,7 @@ class RolloutBuffer(BaseBuffer):
                 "advantages",
                 "returns",
                 "useful",
+                "weights",
             ]
 
             for tensor in _tensor_names:
@@ -502,7 +507,9 @@ class RolloutBuffer(BaseBuffer):
             self.generator_ready = True
 
         useful_indices = np.where(self.useful == 1)[0]
-        indices = np.random.permutation(useful_indices)
+        p_sample = self.weights[useful_indices].reshape(-1) / np.sum(self.weights[useful_indices])
+        indices = np.random.choice(useful_indices, p=p_sample, size=2048, replace=True)
+        # indices = np.random.permutation(useful_indices)
 
         # Return everything, don't create minibatches
         if batch_size is None:

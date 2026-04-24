@@ -56,21 +56,20 @@ def main():
     parser.add_argument('--rl_device', type=str, default='cpu')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--max_steps', type=int, default=30)
-    parser.add_argument('--log_interval', type=int, default=20000, help='Timesteps between simple stdout progress prints')
-    parser.add_argument('--eval_freq', type=int, default=20000, help='Timesteps between evaluations')
+    parser.add_argument('--log_interval', type=int, default=100000, help='Timesteps between simple stdout progress prints')
+    parser.add_argument('--eval_freq', type=int, default=100000, help='Timesteps between evaluations')
     parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
     parser.add_argument('--tensorboard_log', type=str, default=None, help='TensorBoard log dir')
     parser.add_argument('--out', type=str, default='training/models/')
     parser.add_argument('--run_name', type=str, default='run2')
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--ent_coef', type=float, default=0.01)
-    parser.add_argument('--n_steps', type=int, default=512)
-    parser.add_argument('--batch_size', type=int, default=8192)
+    parser.add_argument('--n_steps', type=int, default=2048)
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
     parser.add_argument('--nade', action='store_true', help='Whether to use NADE policy architecture (default: False)')
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
-    parser.add_argument('--critical_threshold', type=float, default=0.5, help='Criticality threshold (default: 0.5)')
+    parser.add_argument('--critical_threshold', type=float, default=0.8, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--train_value_net_only', action='store_true', help='Whether to train only the value network (default: False, trains both policy and value)')
     args = parser.parse_args()
     args.out = os.path.join(args.out, args.run_name)
@@ -126,7 +125,6 @@ def main():
         learning_rate=float(args.learning_rate),
         ent_coef=float(args.ent_coef),
         n_steps=int(args.n_steps),
-        batch_size=int(args.batch_size),
     )
 
     # if args.pretrain and os.path.isfile(args.pretrain):
@@ -180,10 +178,9 @@ def main():
     #     print(f'Initialized policy from {args.pretrain} — matched {len(matched)} tensors')
 
     # Print chosen hyperparameters and ensure model prints some progress; set verbose and attach a simple callback
-    # Ensure model.n_steps/batch_size match args and recreate rollout_buffer to expected total size
+    # Ensure model.n_steps match args and recreate rollout_buffer to expected total size
     # enforce model attributes
     model.n_steps = int(args.n_steps)
-    model.batch_size = int(args.batch_size)
 
     # RolloutBuffer buffer_size should be number of steps (n_steps),
     # observations are stored as (buffer_size, n_envs, ...)
@@ -205,7 +202,7 @@ def main():
                                             gae_lambda=gae_lambda,
                                             n_envs=int(args.num_envs))
 
-    print('Training with hyperparameters:', dict(learning_rate=args.learning_rate, ent_coef=args.ent_coef, n_steps=args.n_steps, batch_size=args.batch_size))
+    print('Training with hyperparameters:', dict(learning_rate=args.learning_rate, ent_coef=args.ent_coef, n_steps=args.n_steps))
     model.verbose = max(getattr(model, 'verbose', 0), 1)
 
     # configure logger (tensorboard/csv/stdout)
