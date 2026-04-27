@@ -31,9 +31,10 @@ def analyze(path):
         try:
             data = np.load(os.path.join(path, file), allow_pickle=True).tolist()
             # print([data[i] for i in range(len(data)) if data[i] > 0])
-            if max(data) > 0.5:
+            if max(data) > 1:
                 print(max(data))
-            crashes.extend(data)
+            else:
+                crashes.extend(data)
         except:
             continue
     np.save("/home/linxuan/Embodied/go2_mujoco/results/nade_all.npy", np.array(crashes[:200000]))

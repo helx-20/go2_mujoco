@@ -58,7 +58,7 @@ class TestEnv:
         self.criticality_model = criticality_model
         self.critical_threshold = critical_threshold
         self.collect_training_data = collect_training_data
-        self.training_data = {'obs': [], 'actions': [], 'rewards': [], 'dones': [], 'useful': [], 'weights': []}
+        self.training_data = {'obs': [], 'actions': [], 'rewards': [], 'dones': [], 'useful': [], 'weights': [], 'log_prob': []}
 
         self.terrain_action_edges = [np.linspace(-1, 1, num=11) for d in range(4)]
         D = 4
@@ -183,7 +183,7 @@ class TestEnv:
 
         Accept seed/options for now but accept them to be compatible with Gym API
         """
-        self.training_data = {'obs': [], 'actions': [], 'rewards': [], 'dones': [], 'useful': [], 'weights': []}
+        self.training_data = {'obs': [], 'actions': [], 'rewards': [], 'dones': [], 'useful': [], 'weights': [], 'log_prob': []}
         # ignore seed/options for now but accept them to be compatible with Gym API
         mujoco.mj_resetData(self.model, self.data)
         # recreate terrain_changer with fresh data reference
@@ -230,6 +230,8 @@ class TestEnv:
                 time_until_next_step = self.model.opt.timestep - (time.time() - step_start)
                 if time_until_next_step > 0:
                     time.sleep(time_until_next_step)
+        
+        self.safe_controller.action_policy_prev[:] = self.go2_controller.action_policy_prev.copy()
 
         return self.get_terrain_observation()
 
@@ -300,25 +302,26 @@ class TestEnv:
             if sim_i % int(self.control_decimation) == 0:
                 if self.collect_training_data:
                     if current_criticality > self.critical_threshold:
-                        target_dof_pos, obs, action_policy = safe_call(self.safe_controller.compute_action_with_training_data, d=self.data, counter=self.robot_counter)
+                        target_dof_pos, obs, action_policy, log_prob = safe_call(self.safe_controller.compute_action_with_training_data, d=self.data, counter=self.robot_counter)
                         useful = True
-                        # self.go2_controller.action_policy_prev[:] = self.safe_controller.action_policy_prev
-                        safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
+                        self.go2_controller.action_policy_prev[:] = self.safe_controller.action_policy_prev.copy()
+                        # safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
                     else:
-                        target_dof_pos, obs, action_policy = safe_call(self.go2_controller.compute_action_with_training_data, d=self.data, counter=self.robot_counter)
+                        target_dof_pos, obs, action_policy, log_prob = safe_call(self.go2_controller.compute_action_with_training_data, d=self.data, counter=self.robot_counter)
                         useful = False
-                        self.safe_controller.action_policy_prev[:] = self.go2_controller.action_policy_prev
+                        self.safe_controller.action_policy_prev[:] = self.go2_controller.action_policy_prev.copy()
                     self.training_data['obs'].append(obs)
                     self.training_data['actions'].append(action_policy)
                     self.training_data['useful'].append(useful)
+                    self.training_data['log_prob'].append(log_prob)
                 else:
                     if current_criticality > self.critical_threshold:
                         target_dof_pos = safe_call(self.safe_controller.compute_action, d=self.data, counter=self.robot_counter)
-                        # self.go2_controller.action_policy_prev[:] = self.safe_controller.action_policy_prev
-                        safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
+                        self.go2_controller.action_policy_prev[:] = self.safe_controller.action_policy_prev.copy()
+                        # safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
                     else:
                         target_dof_pos = safe_call(self.go2_controller.compute_action, d=self.data, counter=self.robot_counter)
-                        self.safe_controller.action_policy_prev[:] = self.go2_controller.action_policy_prev
+                        self.safe_controller.action_policy_prev[:] = self.go2_controller.action_policy_prev.copy()
                 
                 # target_dof_pos = self.go2_controller.compute_action(self.data)
             try:

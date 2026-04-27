@@ -52,8 +52,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--total_timesteps', type=int, default=5000000)
     parser.add_argument('--num_envs', type=int, default=16)
-    parser.add_argument('--sim_device', type=str, default='cpu')
-    parser.add_argument('--rl_device', type=str, default='cpu')
+    parser.add_argument('--rl_device', type=str, default='cuda:1')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--max_steps', type=int, default=30)
     parser.add_argument('--log_interval', type=int, default=100000, help='Timesteps between simple stdout progress prints')
@@ -61,12 +60,14 @@ def main():
     parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
     parser.add_argument('--tensorboard_log', type=str, default=None, help='TensorBoard log dir')
     parser.add_argument('--out', type=str, default='training/models/')
-    parser.add_argument('--run_name', type=str, default='run2')
-    parser.add_argument('--learning_rate', type=float, default=1e-3)
-    parser.add_argument('--ent_coef', type=float, default=0.01)
+    parser.add_argument('--run_name', type=str, default='run_online_3_without_weight')
+    parser.add_argument('--learning_rate', type=float, default=1e-4)
+    parser.add_argument('--ent_coef', type=float, default=0.0)
     parser.add_argument('--n_steps', type=int, default=2048)
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
+    parser.add_argument('--initial', default='training/models/run_offline_round1/ep50.policy.pt')
+    parser.add_argument('--log_std', type=float, default=-3, help='Initial log standard deviation for the policy (default: -2.5)')
     parser.add_argument('--nade', action='store_true', help='Whether to use NADE policy architecture (default: False)')
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
     parser.add_argument('--critical_threshold', type=float, default=0.8, help='Criticality threshold (default: 0.5)')
@@ -127,55 +128,61 @@ def main():
         n_steps=int(args.n_steps),
     )
 
-    # if args.pretrain and os.path.isfile(args.pretrain):
-    #     # prefer already-loaded sb3_pretrain_model if available
-    #     sb3_model = sb3_pretrain_model if sb3_pretrain_model is not None else __import__('stable_baselines3').PPO.load(args.pretrain, device='cpu')
+    if args.initial and os.path.exists(args.initial):
+        # prefer already-loaded sb3_pretrain_model if available
+        if args.initial.endswith('.zip'):
+            initial_model = PPO.load(args.initial, device='cpu')
+            src_sd = initial_model.policy.state_dict()
+        elif args.initial.endswith('.pt'):
+            state_dict = torch.load(args.initial, map_location='cpu')
+            src_sd = state_dict['policy_state_dict']
 
-    #     # Source and destination state dicts
-    #     src_sd = sb3_model.policy.state_dict()
-    #     policy_sd = model.policy.state_dict()
+        # Source and destination state dicts
+        policy_sd = model.policy.state_dict()
 
-    #     matched = {}
-    #     used_src = set()
+        matched = {}
+        used_src = set()
 
-    #     # 1) Exact name + shape matches
-    #     for src_k, src_v in src_sd.items():
-    #         if src_k in policy_sd and tuple(policy_sd[src_k].shape) == tuple(src_v.shape):
-    #             policy_sd[src_k].copy_(src_v)
-    #             matched[src_k] = src_k
-    #             used_src.add(src_k)
+        # 1) Exact name + shape matches
+        for src_k, src_v in src_sd.items():
+            if src_k in policy_sd and tuple(policy_sd[src_k].shape) == tuple(src_v.shape):
+                policy_sd[src_k].copy_(src_v)
+                matched[src_k] = src_k
+                used_src.add(src_k)
 
-    #     # 2) Suffix (last token) + shape matches for remaining dst keys
-    #     for dst_k in list(policy_sd.keys()):
-    #         if dst_k in matched:
-    #             continue
-    #         dst_shape = tuple(policy_sd[dst_k].shape)
-    #         dst_suffix = dst_k.split('.')[-1]
-    #         for src_k, src_v in src_sd.items():
-    #             if src_k in used_src:
-    #                 continue
-    #             if src_k.split('.')[-1] == dst_suffix and tuple(src_v.shape) == dst_shape:
-    #                 policy_sd[dst_k].copy_(src_v)
-    #                 matched[dst_k] = src_k
-    #                 used_src.add(src_k)
-    #                 break
+        # 2) Suffix (last token) + shape matches for remaining dst keys
+        for dst_k in list(policy_sd.keys()):
+            if dst_k in matched:
+                continue
+            dst_shape = tuple(policy_sd[dst_k].shape)
+            dst_suffix = dst_k.split('.')[-1]
+            for src_k, src_v in src_sd.items():
+                if src_k in used_src:
+                    continue
+                if src_k.split('.')[-1] == dst_suffix and tuple(src_v.shape) == dst_shape:
+                    policy_sd[dst_k].copy_(src_v)
+                    matched[dst_k] = src_k
+                    used_src.add(src_k)
+                    break
 
-    #     # 3) Shape-only matching for any remaining dst keys (first-fit)
-    #     for dst_k in list(policy_sd.keys()):
-    #         if dst_k in matched:
-    #             continue
-    #         dst_shape = tuple(policy_sd[dst_k].shape)
-    #         for src_k, src_v in src_sd.items():
-    #             if src_k in used_src:
-    #                 continue
-    #             if tuple(src_v.shape) == dst_shape:
-    #                 policy_sd[dst_k].copy_(src_v)
-    #                 matched[dst_k] = src_k
-    #                 used_src.add(src_k)
-    #                 break
+        # 3) Shape-only matching for any remaining dst keys (first-fit)
+        for dst_k in list(policy_sd.keys()):
+            if dst_k in matched:
+                continue
+            dst_shape = tuple(policy_sd[dst_k].shape)
+            for src_k, src_v in src_sd.items():
+                if src_k in used_src:
+                    continue
+                if tuple(src_v.shape) == dst_shape:
+                    policy_sd[dst_k].copy_(src_v)
+                    matched[dst_k] = src_k
+                    used_src.add(src_k)
+                    break
 
-    #     model.policy.load_state_dict(policy_sd)
-    #     print(f'Initialized policy from {args.pretrain} — matched {len(matched)} tensors')
+        model.policy.load_state_dict(policy_sd)
+        print(f'Initialized policy from {args.initial} — matched {len(matched)} tensors')
+        with torch.no_grad():
+            model.policy.log_std.fill_(args.log_std)
 
     # Print chosen hyperparameters and ensure model prints some progress; set verbose and attach a simple callback
     # Ensure model.n_steps match args and recreate rollout_buffer to expected total size
@@ -333,6 +340,7 @@ def main():
                 if self.verbose:
                     print(f'[PolicyNetEval] evaluation failed: {e}')
                 return True
+            self.model.policy.to(args.rl_device)
 
             results = eval_results if isinstance(eval_results, (list, tuple)) else [float(eval_results)]
 

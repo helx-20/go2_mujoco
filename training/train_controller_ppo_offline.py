@@ -51,20 +51,22 @@ def make_env_fn(normal_policy, max_episode_steps=1000, nade=False, criticality_m
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--rl_device', type=str, default='cuda:2')
+    parser.add_argument('--rl_device', type=str, default='cuda:1')
     parser.add_argument('--max_steps', type=int, default=30)
     parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
     parser.add_argument('--out', type=str, default='training/models/')
-    parser.add_argument('--run_name', type=str, default='run_offline1_new', help='Subdirectory name for this training run (default: run_offline2_2)')
+    parser.add_argument('--run_name', type=str, default='run_offline_scratch_round2', help='Subdirectory name for this training run (default: run_offline2_2)')
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
-    # parser.add_argument('--initial', type=str, default='training/models/actor_init.zip')
-    parser.add_argument('--initial', type=str, default='training/models/run_offline1_new/run_offline1_new_offline_ep50.policy.pt')
-    parser.add_argument('--dataset', type=str, default='/mnt/mnt1/linxuan/go2_data/data/training/round1_new', help='Path to offline dataset directory')
+    # parser.add_argument('--initial', default='training/models/actor_init.zip')
+    parser.add_argument('--initial', default='training/models/run_offline_scratch_round1/ep50.policy.pt')
+    # parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/random_round2','/mnt/mnt1/linxuan/go2_data/data/training/random_round3', '/mnt/mnt1/linxuan/go2_data/data/training/random_round4', '/mnt/mnt1/linxuan/go2_data/data/training/random_round5'], help='Path to offline dataset directory')
+    parser.add_argument('--log_std', type=float, default=-3.0, help='Initial log std for policy distribution')
+    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/scratch_round2'], help='Path to offline dataset directory')
     parser.add_argument('--offline_epochs', type=int, default=50, help='Epochs for offline training')
     parser.add_argument('--offline_batch_size', type=int, default=512)
-    parser.add_argument('--offline_lr', type=float, default=1e-3)
+    parser.add_argument('--offline_lr', type=float, default=1e-4)
     parser.add_argument('--value_coef', type=float, default=1.0, help='Weight for value regression loss during offline training')
     args = parser.parse_args()
     args.out = os.path.join(args.out, args.run_name)
@@ -114,7 +116,7 @@ def main():
         policy_kwargs=policy_kwargs,
     )
 
-    if args.initial:
+    if args.initial and os.path.exists(args.initial):
         # prefer already-loaded sb3_pretrain_model if available
         if args.initial.endswith('.zip'):
             initial_model = sb3_pretrain_model if sb3_pretrain_model is not None else __import__('stable_baselines3').PPO.load(args.initial, device='cpu')
@@ -167,84 +169,187 @@ def main():
 
         model.policy.load_state_dict(policy_sd)
         print(f'Initialized policy from {args.initial} — matched {len(matched)} tensors')
+        # Initialize/override policy log_std so it's not zero (trainable if possible)
 
-    def load_offline_dataset(data_dir):
-        all_obs, all_acts, all_returns, all_weights = np.zeros((0, 48)), np.zeros((0, 12)), np.zeros((0,)), np.zeros((0,))
+    init_log_std = args.log_std
+    with torch.no_grad():
+        model.policy.log_std.fill_(init_log_std)
+
+    def load_offline_dataset(data_dirs):
+        all_obs, all_acts, all_returns, all_weights, all_log_prob = np.zeros((0, 48)), np.zeros((0, 12)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
         gamma = getattr(model, 'gamma', 0.99)
-        for filename in os.listdir(data_dir):
-            if filename.endswith('.npy'):
-                path = os.path.join(data_dir, filename)
-                data = np.load(path, allow_pickle=True).item()
+        for data_dir in data_dirs:
+            all_data_path = os.path.join(data_dir, 'all_data_unified_weight.npy')
+            if os.path.exists(all_data_path):
+                data = np.load(all_data_path, allow_pickle=True).item()
                 obs = np.array(data['obs'], dtype=np.float32)
                 acts = np.array(data['actions'], dtype=np.float32)
-                rews = np.array(data['rewards'], dtype=np.float32)
-                dones = np.array(data['dones'], dtype=np.float32)
-                useful = np.array(data['useful'], dtype=bool)
+                returns = np.array(data['returns'], dtype=np.float32)
                 weights = np.array(data['weights'], dtype=np.float32)
+                log_prob = np.array(data['log_prob'], dtype=np.float32)
 
-                # compute discounted returns per episode
-                returns = np.zeros_like(rews, dtype=np.float32)
-                G = 0.0
-                for i in reversed(range(len(rews))):
-                    if dones[i]:
-                        G = rews[i]
-                    else:
-                        G = rews[i] + gamma * G
-                    returns[i] = G
+                all_obs = np.concatenate([all_obs, obs])
+                all_acts = np.concatenate([all_acts, acts])
+                all_returns = np.concatenate([all_returns, returns])
+                all_weights = np.concatenate([all_weights, weights])
+                all_log_prob = np.concatenate([all_log_prob, log_prob])
+            else:
+                tmp_obs, tmp_acts, tmp_returns, tmp_weights, tmp_log_prob = np.zeros((0, 48)), np.zeros((0, 12)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+                for filename in os.listdir(data_dir):
+                    if filename.endswith('.npy') and not filename.startswith('all'):
+                        path = os.path.join(data_dir, filename)
+                        try:
+                            data = np.load(path, allow_pickle=True).item()
+                        except Exception as e:
+                            continue
+                        obs = np.array(data['obs'], dtype=np.float32)
+                        acts = np.array(data['actions'], dtype=np.float32)
+                        rews = np.array(data['rewards'], dtype=np.float32)
+                        dones = np.array(data['dones'], dtype=np.float32)
+                        useful = np.array(data['useful'], dtype=bool)
+                        weights = np.array(data['weights'], dtype=np.float32)
+                        log_prob = np.array(data['log_prob'], dtype=np.float32)
 
-                useful_idx = np.where(useful)[0]
+                        # compute discounted returns per episode
+                        returns = np.zeros_like(rews, dtype=np.float32)
+                        G = 0.0
+                        for i in reversed(range(len(rews))):
+                            if dones[i]:
+                                G = rews[i]
+                            else:
+                                G = rews[i] + gamma * G
+                            returns[i] = G
 
-                all_obs = np.concatenate([all_obs, obs[useful_idx]])
-                all_acts = np.concatenate([all_acts, acts[useful_idx]])
-                all_returns = np.concatenate([all_returns, returns[useful_idx]])
-                all_weights = np.concatenate([all_weights, weights[useful_idx]])
+                        unified_weights = np.zeros_like(weights, dtype=np.float32)
+                        cur_weight = 1.0
+                        idx_start = 0
+                        for i in range(1, len(weights)):
+                            if weights[i] > 0 and weights[i] != weights[i-1]:
+                                cur_weight *= weights[i]
+                            if dones[i]:
+                                if rews[i] < 0 and cur_weight > 0.5:
+                                    cur_weight = 0.1
+                                unified_weights[idx_start:i+1] = cur_weight
+                                idx_start = i + 1
+                                cur_weight = 1.0
+
+                        useful_idx = np.where(useful)[0]
+
+                        tmp_obs = np.concatenate([tmp_obs, obs[useful_idx]])
+                        tmp_acts = np.concatenate([tmp_acts, acts[useful_idx]])
+                        tmp_returns = np.concatenate([tmp_returns, returns[useful_idx]])
+                        tmp_weights = np.concatenate([tmp_weights, unified_weights[useful_idx]])
+                        tmp_log_prob = np.concatenate([tmp_log_prob, log_prob[useful_idx]])
+                
+                np.save(all_data_path, {'obs': tmp_obs, 'actions': tmp_acts, 'returns': tmp_returns, 'weights': tmp_weights, 'log_prob': tmp_log_prob})
+                all_obs = np.concatenate([all_obs, tmp_obs])
+                all_acts = np.concatenate([all_acts, tmp_acts])
+                all_returns = np.concatenate([all_returns, tmp_returns])
+                all_weights = np.concatenate([all_weights, tmp_weights])
+                all_log_prob = np.concatenate([all_log_prob, tmp_log_prob])
 
         obs_t = torch.tensor(all_obs, dtype=torch.float32)
         acts_t = torch.tensor(all_acts, dtype=torch.float32)
         returns_t = torch.tensor(all_returns, dtype=torch.float32)
         weights_t = torch.tensor(all_weights, dtype=torch.float32)
-        return obs_t, acts_t, returns_t, weights_t
+        log_prob_t = torch.tensor(all_log_prob, dtype=torch.float32)
+        return obs_t, acts_t, returns_t, weights_t, log_prob_t
 
     def offline_train_policy(model, dataset_path, epochs, batch_size, lr, value_coef, device='cpu'):
         from torch.utils.data import TensorDataset, DataLoader
-        obs_t, acts_t, returns_t, weights_t = load_offline_dataset(dataset_path)
-        ds = TensorDataset(obs_t, acts_t, returns_t)
-        dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
+        obs_t, acts_t, returns_t, weights_t, log_prob_t = load_offline_dataset(dataset_path)
+        ds = TensorDataset(obs_t, acts_t, returns_t, weights_t, log_prob_t)
+        # Use WeightedRandomSampler to sample according to dataset weights
+        from torch.utils.data import WeightedRandomSampler
+
+        sample_weights = weights_t.clone().float()
+
+        if sample_weights.sum().item() <= 0:
+            # fallback to uniform sampling
+            dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
+        else:
+            sampler = WeightedRandomSampler(weights=sample_weights.cpu(), num_samples=len(sample_weights), replacement=True)
+            dl = DataLoader(ds, batch_size=batch_size, sampler=sampler)
+        
+        # dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
 
         policy = model.policy
         # Prefer to use mlp_extractor.policy_net/value_net and action_net/value_net heads
         params = [p for p in policy.parameters() if p.requires_grad]
         optim = torch.optim.Adam(params, lr=lr)
+        if args.initial.endswith('.pt'):
+            if "optimizer_state_dict" in state_dict.keys():
+                optim.load_state_dict(state_dict["optimizer_state_dict"])
+                print(f'Loaded optimizer state from {args.initial}')
 
         for ep in range(1, epochs+1):
             epoch_loss = 0.0
-            for b_obs, b_act, b_ret in dl:
+            for b_obs, b_act, b_ret, b_weights, b_log_prob in dl:
                 b_obs = b_obs.to(device)
                 b_act = b_act.to(device)
                 b_ret = b_ret.to(device)
+                b_weights = b_weights.to(device)
+                b_log_prob = b_log_prob.to(device)
 
                 # forward through policy pi head
                 latent_pi = policy.mlp_extractor.policy_net(b_obs)
                 pred_act = policy.action_net(latent_pi)
-                pred_act = torch.clip(pred_act, -4, 4)
+                # pred_act = torch.clip(pred_act, -4, 4)
 
                 # value prediction
                 latent_v = policy.mlp_extractor.value_net(b_obs)
                 pred_val = policy.value_net(latent_v).squeeze(-1)
-                # import pdb; pdb.set_trace()
 
                 # value loss
                 val_loss = F.mse_loss(pred_val, b_ret)
 
                 # advantage (returns - value)
                 adv = (b_ret - pred_val.detach())
-                adv_weights = torch.clamp(adv, min=0.0)
-                if adv_weights.sum() > 0:
-                    adv_weights = adv_weights / (adv_weights.mean() + 1e-8)
+                adv_pos = torch.clamp(adv, min=0.0)
+                if adv_pos.sum() > 0:
+                    adv_pos = adv_pos / (adv_pos.mean() + 1e-8)
+                    adv_pos = torch.clamp(adv_pos, max=10.0)
 
-                # policy dist: treat as regression to actions (MSE), weight by advantages
-                per_sample_mse = ((pred_act - b_act)**2).mean(dim=1)
-                policy_loss = (adv_weights * per_sample_mse).mean() if adv_weights.sum() > 0 else per_sample_mse.mean()
+                # Build action distribution from predicted mean and a trainable policy log-std when available
+                log_std = args.log_std * torch.ones_like(pred_act) # policy.log_std
+
+                if log_std.dim() == 1:
+                    log_std = log_std.unsqueeze(0).expand(pred_act.shape[0], -1)
+                elif log_std.shape[0] != pred_act.shape[0]:
+                    log_std = log_std.expand(pred_act.shape[0], -1)
+
+                # numeric protection: clamp log_std and std to stable ranges
+                # log_std = torch.clamp(log_std, min=-20.0, max=2.0)
+                std = torch.exp(log_std)
+                # std = torch.clamp(std, min=1e-3, max=1e2)
+
+                dist = torch.distributions.Normal(pred_act, std)
+                # joint log-prob over action dimensions
+                logp = dist.log_prob(b_act).sum(dim=1)
+
+                # Ensure stored behavior log_prob is joint (sum per-dim if necessary)
+                if b_log_prob.dim() > 1:
+                    b_log_prob = b_log_prob.sum(dim=1)
+
+                # Use stored behavior log_prob for importance correction if available
+                # compute importance ratio r = exp(logp - log_behavior) with stabilization
+                log_ratio = logp - b_log_prob
+                log_ratio = torch.clamp(log_ratio, min=-3.0, max=3.0)
+                imp_ratio = torch.exp(log_ratio)
+                if imp_ratio.numel() > 0 and torch.isfinite(imp_ratio).any():
+                    imp_ratio = imp_ratio / (imp_ratio.mean() + 1e-8)
+                    imp_ratio = torch.clamp(imp_ratio, max=10.0)
+                else:
+                    imp_ratio = torch.ones_like(logp)
+
+                combined_w = adv_pos * imp_ratio if adv_pos.sum() > 0 else imp_ratio
+
+                if combined_w.sum() > 0:
+                    combined_w = combined_w / (combined_w.mean() + 1e-8)
+                    combined_w = torch.clamp(combined_w, max=10.0)
+
+                # maximize weighted log-prob -> minimize negative weighted log-prob
+                policy_loss = -(combined_w * logp).mean()
 
                 loss = policy_loss + value_coef * val_loss
 
@@ -256,11 +361,12 @@ def main():
 
             avg = epoch_loss / (len(dl) if len(dl) > 0 else 1)
             print(f'[Offline] epoch={ep}/{epochs} loss={avg:.6f}')
+            print('log_std:', policy.log_std.data.cpu().numpy())
 
-            # save final offline-updated policy
+            # save final offline-updated policy (include optimizer state)
             try:
-                save_to = os.path.join(args.out, f'{args.run_name}_offline_ep{ep}.policy.pt')
-                safe_model_save(model, save_to, verbose=1)
+                save_to = os.path.join(args.out, f'ep{ep}.policy.pt')
+                safe_model_save(model, save_to, verbose=1, optimizer=optim)
             except Exception as e:
                 print('[Offline] saving failed:', e)
 
@@ -327,7 +433,7 @@ def main():
 
         return results
 
-    def safe_model_save(model_obj, save_path, verbose=1):
+    def safe_model_save(model_obj, save_path, verbose=1, optimizer=None):
         """Save `model_obj` while temporarily clearing attributes that may be
         unpickleable (eg. multiprocessing auth keys inside VecEnv/processes).
         Restores cleared attributes after the save attempt.
@@ -343,7 +449,7 @@ def main():
                     cleared.pop(attr, None)
 
         try:
-            # try to save only the policy state dict with torch
+            # try to save model policy state dict and optional optimizer state dict with torch
             fb_dir = os.path.dirname(save_path)
             if fb_dir:
                 os.makedirs(fb_dir, exist_ok=True)
@@ -351,9 +457,17 @@ def main():
             # prefer .pt for fallback
             if not fb_path.endswith('.pt'):
                 fb_path = save_path + '.pt'
-            torch.save({'policy_state_dict': model_obj.policy.state_dict()}, fb_path)
+            payload = {'policy_state_dict': model_obj.policy.state_dict()}
+            if optimizer is not None:
+                try:
+                    payload['optimizer_state_dict'] = optimizer.state_dict()
+                except Exception:
+                    # best-effort: ignore optimizer if it can't be serialized
+                    if verbose:
+                        print('[safe_model_save] warning: failed to include optimizer state_dict')
+            torch.save(payload, fb_path)
             if verbose:
-                print(f'[safe_model_save] saved policy state_dict to {fb_path}')
+                print(f'[safe_model_save] saved policy (and optimizer) to {fb_path}')
             return True
         finally:
             for attr, val in cleared.items():

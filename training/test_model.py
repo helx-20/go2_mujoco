@@ -115,9 +115,14 @@ def run(args):
     training_out = getattr(args, 'training_out', None)
     if training_out is not None:
         collect_training_data = True
+        safe_policy = sb3.policy
+        with torch.no_grad():
+            safe_policy.log_std.fill_(-2)
     else:
         collect_training_data = False
-    trainer = TestEnv(policy=pretrain_wrapper, safe_policy=safe_wrapper, config_file_path=config_file_path, terrain_config_file=terrain_cfg, criticality_model=criticality_model, critical_threshold=args.critical_threshold, collect_training_data=collect_training_data)
+        safe_policy = safe_wrapper
+    
+    trainer = TestEnv(policy=pretrain_wrapper, safe_policy=safe_policy, config_file_path=config_file_path, terrain_config_file=terrain_cfg, criticality_model=criticality_model, critical_threshold=args.critical_threshold, collect_training_data=collect_training_data)
     env = TerrainGymEnv(trainer, max_episode_steps=args.max_steps)
 
     n = args.episodes
@@ -141,13 +146,16 @@ def run(args):
     candidates_arr = centers
 
     # global buffers for criticality training data (across episodes)
-    training_data_all = {'obs': [], 'actions': [], 'rewards': [], 'dones': [], 'useful': [], 'weights': []}
+    training_data_all = {'obs': [], 'actions': [], 'rewards': [], 'dones': [], 'useful': [], 'weights': [], 'log_prob': []}
+
+    use_safe_model_num = 0
 
     for i in range(n):
         obs, _ = env.reset()
         done = False
         steps = 0
         total_weight = 1.0
+        use_safe_model = False
 
         while not done:
             steps += 1
@@ -157,13 +165,20 @@ def run(args):
                 t_in = torch.cat([t_obs, t_act], dim=1)
                 t_out = criticality_model(t_in)
                 criticality = torch.nn.functional.softmax(t_out, dim=1)[:, 1].squeeze().cpu().numpy()
+            if np.max(criticality) > args.critical_threshold:
+                use_safe_model = True
+
             if not args.nade:
                 idx = np.random.randint(0, candidates_arr.shape[0])
                 weight = 1.0
             else:
                 if np.max(criticality) > 3e-1 and total_weight > 1e-4:
-                    idx = int(np.argmax(criticality))
-                    weight = float((1 / len(criticality)) / (criticality[idx] / np.sum(criticality)))
+                    q_list = 0.99 * (criticality / np.sum(criticality)) + 0.01 * np.ones_like(criticality) / len(criticality)
+                    q_list = q_list / np.sum(q_list)
+                    idx = np.random.choice(np.arange(candidates_arr.shape[0]), p=q_list)
+                    # idx = int(np.argmax(criticality))
+                    # weight = float((1 / len(criticality)) / (criticality[idx] / np.sum(criticality)))
+                    weight = float((1 / len(criticality)) / q_list[idx])
                 else:
                     idx = np.random.randint(0, candidates_arr.shape[0])
                     weight = 1.0
@@ -177,8 +192,13 @@ def run(args):
             obs = next_obs
             done = bool(terminated) or bool(truncated) or bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
 
+        if use_safe_model:
+            use_safe_model_num += 1
+        print(f'Use safe model: {use_safe_model_num}/{n}')
+
         # episode finished; determine crash/failure from last step's info
         crash = int(bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False)))
+        crash *= total_weight
         crashes.append(crash)
         crash_type = 'fallen' if info.get('fallen', False) else 'collided' if info.get('collided', False) else 'base_collision' if info.get('base_collision', False) else 'thigh_collision' if info.get('thigh_collision', False) else 'stuck' if info.get('stuck', False) else 'none'
         print(f"episode {i+1}/{n} steps={steps} crash={crash}")
@@ -190,15 +210,18 @@ def run(args):
             ep_dones = env.trainer.training_data['dones']
             ep_dones[-1] = True
             ep_rewards = env.trainer.training_data['rewards']
+            if info['success']:
+                ep_rewards[-1] += env.trainer.reward_scales['success']
             ep_useful = env.trainer.training_data['useful']
             ep_weights = env.trainer.training_data['weights']
+            ep_log_prob = env.trainer.training_data['log_prob']
             training_data_all['obs'].extend(ep_obs)
             training_data_all['actions'].extend(ep_actions)
             training_data_all['dones'].extend(ep_dones)
             training_data_all['rewards'].extend(ep_rewards)
             training_data_all['useful'].extend(ep_useful)
             training_data_all['weights'].extend(ep_weights)
-
+            training_data_all['log_prob'].extend(ep_log_prob)
         if (i + 1) % args.log_interval == 0:
             Mean, RHF, Val = calculate_val(crashes)
             print(f"episode {i+1}/{n}  samples={len(crashes)}  Mean={Mean[-1]:.6f}  RHF={RHF[-1]:.6f}")
@@ -235,10 +258,10 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # parser.add_argument('--controller_path', type=str, default='training/models/actor_init.zip', help='Path to SB3 .zip or .pt file containing the trained policy')
-    parser.add_argument('--controller_path', type=str, default='training/models/run_offline1_new/run_offline1_new_offline_ep50.policy.pt')
+    parser.add_argument('--controller_path', type=str, default='training/models/run_offline_scratch_round1/ep50.policy.pt')
     parser.add_argument('--critical_threshold', type=float, default=0.8, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--worker_id', type=int, default=0)
-    parser.add_argument('--episodes', type=int, default=100)
+    parser.add_argument('--episodes', type=int, default=200)
     parser.add_argument('--max_steps', type=int, default=40)
     parser.add_argument('--log_interval', type=int, default=10)
     parser.add_argument('--out', type=str, default='training/results', help='Path to save crashes numpy array')
@@ -249,4 +272,5 @@ if __name__ == '__main__':
     os.makedirs(args.out, exist_ok=True)
     if args.training_out:
         os.makedirs(args.training_out, exist_ok=True)
+        args.out = None
     run(args)

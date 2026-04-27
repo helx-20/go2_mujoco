@@ -507,9 +507,9 @@ class RolloutBuffer(BaseBuffer):
             self.generator_ready = True
 
         useful_indices = np.where(self.useful == 1)[0]
-        p_sample = self.weights[useful_indices].reshape(-1) / np.sum(self.weights[useful_indices])
-        indices = np.random.choice(useful_indices, p=p_sample, size=2048, replace=True)
-        # indices = np.random.permutation(useful_indices)
+        # p_sample = self.weights[useful_indices].reshape(-1) / np.sum(self.weights[useful_indices])
+        # indices = np.random.choice(useful_indices, p=p_sample, size=2048, replace=True)
+        indices = np.random.permutation(useful_indices)
 
         # Return everything, don't create minibatches
         if batch_size is None:
