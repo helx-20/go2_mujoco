@@ -73,7 +73,7 @@ class GO2TerrainCfg( LeggedRobotCfg ):
             stand_still = -0.
             collision = -0.0
             failed = -1.0
-            success = 1.0
+            success = 0.0
 
         # class scales( LeggedRobotCfg.rewards.scales ):
         #     torques = -0.0002

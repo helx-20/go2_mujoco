@@ -51,23 +51,24 @@ def make_env_fn(normal_policy, max_episode_steps=1000, nade=False, criticality_m
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--rl_device', type=str, default='cuda:1')
+    parser.add_argument('--rl_device', type=str, default='cuda:2')
     parser.add_argument('--max_steps', type=int, default=30)
     parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
     parser.add_argument('--out', type=str, default='training/models/')
-    parser.add_argument('--run_name', type=str, default='run_offline_scratch_round2', help='Subdirectory name for this training run (default: run_offline2_2)')
+    parser.add_argument('--run_name', type=str, default='run_offline_new2_round3', help='Subdirectory name for this training run')
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
     # parser.add_argument('--initial', default='training/models/actor_init.zip')
-    parser.add_argument('--initial', default='training/models/run_offline_scratch_round1/ep50.policy.pt')
-    # parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/random_round2','/mnt/mnt1/linxuan/go2_data/data/training/random_round3', '/mnt/mnt1/linxuan/go2_data/data/training/random_round4', '/mnt/mnt1/linxuan/go2_data/data/training/random_round5'], help='Path to offline dataset directory')
-    parser.add_argument('--log_std', type=float, default=-3.0, help='Initial log std for policy distribution')
-    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/scratch_round2'], help='Path to offline dataset directory')
-    parser.add_argument('--offline_epochs', type=int, default=50, help='Epochs for offline training')
-    parser.add_argument('--offline_batch_size', type=int, default=512)
+    parser.add_argument('--initial', default='training/models/run_offline_new2_round2/best.policy.pt')
+    parser.add_argument('--log_std', type=float, default=-2, help='Initial log std for policy distribution')
+    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/new2_round3'], help='Path to offline dataset directory')
+    parser.add_argument('--offline_epochs', type=int, default=200, help='Epochs for offline training')
+    parser.add_argument('--offline_batch_size', type=int, default=2048)
     parser.add_argument('--offline_lr', type=float, default=1e-4)
     parser.add_argument('--value_coef', type=float, default=1.0, help='Weight for value regression loss during offline training')
+    parser.add_argument('--train_value_net_only', action='store_true', help='Only train value net during offline training (policy net weights will be frozen)')
+    parser.add_argument('--use_initial_optimizer', action='store_true', help='Whether to load optimizer state from initial .pt file if available (ignored if initial is SB3 .zip)')
     args = parser.parse_args()
     args.out = os.path.join(args.out, args.run_name)
     print(args)
@@ -171,9 +172,12 @@ def main():
         print(f'Initialized policy from {args.initial} — matched {len(matched)} tensors')
         # Initialize/override policy log_std so it's not zero (trainable if possible)
 
-    init_log_std = args.log_std
-    with torch.no_grad():
-        model.policy.log_std.fill_(init_log_std)
+    if args.log_std is not None:
+        try:
+            with torch.no_grad():
+                model.policy.log_std.fill_(args.log_std)
+        except:
+            pass
 
     def load_offline_dataset(data_dirs):
         all_obs, all_acts, all_returns, all_weights, all_log_prob = np.zeros((0, 48)), np.zeros((0, 12)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
@@ -227,13 +231,14 @@ def main():
                             if weights[i] > 0 and weights[i] != weights[i-1]:
                                 cur_weight *= weights[i]
                             if dones[i]:
-                                if rews[i] < 0 and cur_weight > 0.5:
-                                    cur_weight = 0.1
+                                cur_weight = max(cur_weight, 0.1)
                                 unified_weights[idx_start:i+1] = cur_weight
                                 idx_start = i + 1
                                 cur_weight = 1.0
 
                         useful_idx = np.where(useful)[0]
+                        if len(useful_idx) == 0:
+                            continue
 
                         tmp_obs = np.concatenate([tmp_obs, obs[useful_idx]])
                         tmp_acts = np.concatenate([tmp_acts, acts[useful_idx]])
@@ -252,7 +257,9 @@ def main():
         acts_t = torch.tensor(all_acts, dtype=torch.float32)
         returns_t = torch.tensor(all_returns, dtype=torch.float32)
         weights_t = torch.tensor(all_weights, dtype=torch.float32)
+        weights_t = weights_t / (weights_t.mean() + 1e-8)
         log_prob_t = torch.tensor(all_log_prob, dtype=torch.float32)
+        print(f'Loaded offline dataset with {len(obs_t)} samples from {len(data_dirs)} directories')
         return obs_t, acts_t, returns_t, weights_t, log_prob_t
 
     def offline_train_policy(model, dataset_path, epochs, batch_size, lr, value_coef, device='cpu'):
@@ -264,24 +271,31 @@ def main():
 
         sample_weights = weights_t.clone().float()
 
-        if sample_weights.sum().item() <= 0:
-            # fallback to uniform sampling
-            dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
-        else:
-            sampler = WeightedRandomSampler(weights=sample_weights.cpu(), num_samples=len(sample_weights), replacement=True)
-            dl = DataLoader(ds, batch_size=batch_size, sampler=sampler)
+        # if sample_weights.sum().item() <= 0:
+        #     # fallback to uniform sampling
+        #     dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
+        # else:
+        #     sampler = WeightedRandomSampler(weights=sample_weights.cpu(), num_samples=len(sample_weights), replacement=True)
+        #     dl = DataLoader(ds, batch_size=batch_size, sampler=sampler)
         
-        # dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
 
         policy = model.policy
         # Prefer to use mlp_extractor.policy_net/value_net and action_net/value_net heads
         params = [p for p in policy.parameters() if p.requires_grad]
         optim = torch.optim.Adam(params, lr=lr)
-        if args.initial.endswith('.pt'):
+        if args.initial.endswith('.pt') and args.use_initial_optimizer:
             if "optimizer_state_dict" in state_dict.keys():
                 optim.load_state_dict(state_dict["optimizer_state_dict"])
                 print(f'Loaded optimizer state from {args.initial}')
+        
+        if args.train_value_net_only:
+            for name, param in policy.named_parameters():
+                if 'value' not in name:
+                    param.requires_grad = False
+            print('Training value net only, policy net weights frozen.')
 
+        min_loss = float('inf')
         for ep in range(1, epochs+1):
             epoch_loss = 0.0
             for b_obs, b_act, b_ret, b_weights, b_log_prob in dl:
@@ -300,23 +314,24 @@ def main():
                 latent_v = policy.mlp_extractor.value_net(b_obs)
                 pred_val = policy.value_net(latent_v).squeeze(-1)
 
-                # value loss
-                val_loss = F.mse_loss(pred_val, b_ret)
+                # value loss (per-sample) and weight by dataset sample weight b_weights
+                val_per_sample = F.mse_loss(pred_val, b_ret, reduction='none')
+                val_loss = (val_per_sample * b_weights).mean()
 
                 # advantage (returns - value)
                 adv = (b_ret - pred_val.detach())
-                adv_pos = torch.clamp(adv, min=0.0)
-                if adv_pos.sum() > 0:
-                    adv_pos = adv_pos / (adv_pos.mean() + 1e-8)
-                    adv_pos = torch.clamp(adv_pos, max=10.0)
+                # adv_pos = torch.clamp(adv, min=0.0)
+                # if adv_pos.sum() > 0:
+                #     adv_pos = adv_pos / (adv_pos.mean() + 1e-8)
+                #     adv_pos = torch.clamp(adv_pos, max=3.0)
 
                 # Build action distribution from predicted mean and a trainable policy log-std when available
                 log_std = args.log_std * torch.ones_like(pred_act) # policy.log_std
 
-                if log_std.dim() == 1:
-                    log_std = log_std.unsqueeze(0).expand(pred_act.shape[0], -1)
-                elif log_std.shape[0] != pred_act.shape[0]:
-                    log_std = log_std.expand(pred_act.shape[0], -1)
+                # if log_std.dim() == 1:
+                #     log_std = log_std.unsqueeze(0).expand(pred_act.shape[0], -1)
+                # elif log_std.shape[0] != pred_act.shape[0]:
+                #     log_std = log_std.expand(pred_act.shape[0], -1)
 
                 # numeric protection: clamp log_std and std to stable ranges
                 # log_std = torch.clamp(log_std, min=-20.0, max=2.0)
@@ -334,24 +349,23 @@ def main():
                 # Use stored behavior log_prob for importance correction if available
                 # compute importance ratio r = exp(logp - log_behavior) with stabilization
                 log_ratio = logp - b_log_prob
-                log_ratio = torch.clamp(log_ratio, min=-3.0, max=3.0)
                 imp_ratio = torch.exp(log_ratio)
-                if imp_ratio.numel() > 0 and torch.isfinite(imp_ratio).any():
-                    imp_ratio = imp_ratio / (imp_ratio.mean() + 1e-8)
-                    imp_ratio = torch.clamp(imp_ratio, max=10.0)
-                else:
-                    imp_ratio = torch.ones_like(logp)
+                combined_w = adv * imp_ratio
 
-                combined_w = adv_pos * imp_ratio if adv_pos.sum() > 0 else imp_ratio
-
-                if combined_w.sum() > 0:
-                    combined_w = combined_w / (combined_w.mean() + 1e-8)
-                    combined_w = torch.clamp(combined_w, max=10.0)
+                # if combined_w.sum() > 0:
+                #     combined_w = combined_w / (combined_w.mean() + 1e-8)
+                combined_w_pos = torch.clamp(combined_w, min=0.0, max=3.0)
+                combined_w_neg = torch.clamp(combined_w, max=0.0, min=-3.0)
 
                 # maximize weighted log-prob -> minimize negative weighted log-prob
-                policy_loss = -(combined_w * logp).mean()
+                # also multiply by dataset sample weight b_weights
+                weighted_logp = - combined_w_pos * logp * b_weights + combined_w_neg * logp * b_weights
+                policy_loss = weighted_logp.mean()
 
-                loss = policy_loss + value_coef * val_loss
+                if args.train_value_net_only:
+                    loss = val_loss
+                else:
+                    loss = policy_loss + value_coef * val_loss
 
                 optim.zero_grad()
                 loss.backward()
@@ -361,12 +375,17 @@ def main():
 
             avg = epoch_loss / (len(dl) if len(dl) > 0 else 1)
             print(f'[Offline] epoch={ep}/{epochs} loss={avg:.6f}')
-            print('log_std:', policy.log_std.data.cpu().numpy())
+            # print('log_std:', policy.log_std.data.cpu().numpy())
+            if avg < min_loss:
+                min_loss = avg
+                save_to = os.path.join(args.out, f'best.policy.pt')
+                safe_model_save(model, save_to, verbose=0, optimizer=optim)
+                print(f'[Offline] new best model at epoch {ep} with loss {avg:.6f}')
 
             # save final offline-updated policy (include optimizer state)
             try:
                 save_to = os.path.join(args.out, f'ep{ep}.policy.pt')
-                safe_model_save(model, save_to, verbose=1, optimizer=optim)
+                safe_model_save(model, save_to, verbose=0, optimizer=optim)
             except Exception as e:
                 print('[Offline] saving failed:', e)
 

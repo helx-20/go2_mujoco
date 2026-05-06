@@ -116,8 +116,13 @@ def run(args):
     if training_out is not None:
         collect_training_data = True
         safe_policy = sb3.policy
-        with torch.no_grad():
-            safe_policy.log_std.fill_(-2)
+        if args.initial_log_std is not None:
+            try:
+                with torch.no_grad():
+                    safe_policy.log_std.fill_(args.initial_log_std)
+            except:
+                pass
+
     else:
         collect_training_data = False
         safe_policy = safe_wrapper
@@ -194,17 +199,19 @@ def run(args):
 
         if use_safe_model:
             use_safe_model_num += 1
-        print(f'Use safe model: {use_safe_model_num}/{n}')
+        print(f'Use safe model: {use_safe_model_num}/{i+1}')
 
         # episode finished; determine crash/failure from last step's info
         crash = int(bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False)))
         crash *= total_weight
         crashes.append(crash)
         crash_type = 'fallen' if info.get('fallen', False) else 'collided' if info.get('collided', False) else 'base_collision' if info.get('base_collision', False) else 'thigh_collision' if info.get('thigh_collision', False) else 'stuck' if info.get('stuck', False) else 'none'
-        print(f"episode {i+1}/{n} steps={steps} crash={crash}")
+        print(f"episode {i+1}/{n} steps={steps} crash={crash}, weight={total_weight:.6f}, crash_type={crash_type}, use_safe_model={use_safe_model}")
 
         # label and append per-episode data to global training buffers
-        if training_out is not None:
+        save = bool(crash > 0) if args.save_crash_only else True
+        save = bool(save and use_safe_model)
+        if training_out is not None and save:
             ep_obs = env.trainer.training_data['obs']
             ep_actions = env.trainer.training_data['actions']
             ep_dones = env.trainer.training_data['dones']
@@ -258,19 +265,28 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # parser.add_argument('--controller_path', type=str, default='training/models/actor_init.zip', help='Path to SB3 .zip or .pt file containing the trained policy')
-    parser.add_argument('--controller_path', type=str, default='training/models/run_offline_scratch_round1/ep50.policy.pt')
+    parser.add_argument('--controller_path', type=str, default='training/models/run_offline_new2_round3/best.policy.pt')
     parser.add_argument('--critical_threshold', type=float, default=0.8, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--worker_id', type=int, default=0)
-    parser.add_argument('--episodes', type=int, default=200)
+    parser.add_argument('--episodes', type=int, default=100)
     parser.add_argument('--max_steps', type=int, default=40)
     parser.add_argument('--log_interval', type=int, default=10)
     parser.add_argument('--out', type=str, default='training/results', help='Path to save crashes numpy array')
     parser.add_argument('--save_interval', type=int, default=10, help='Save results every N episodes at log interval')
     parser.add_argument('--training_out', type=str, default=None, help='Optional path to save criticality dataset (obs, actions, labels)')
+    parser.add_argument('--save_crash_only', action='store_true', help='Only save episodes that ended in crash to training_out dataset')
     parser.add_argument('--nade', action='store_true')
+    parser.add_argument('--initial_log_std', type=float, default=None, help='Optional initial log std for safe_policy (overridden by loaded model if present)')
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
     if args.training_out:
         os.makedirs(args.training_out, exist_ok=True)
         args.out = None
+    else:
+        np.random.seed(args.worker_id)
+        torch.manual_seed(args.worker_id)                  
+        torch.cuda.manual_seed(args.worker_id)             
+        torch.cuda.manual_seed_all(args.worker_id)          
+        torch.backends.cudnn.deterministic = True
+
     run(args)
