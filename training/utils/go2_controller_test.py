@@ -121,7 +121,7 @@ class Go2Controller:
         if isinstance(action_policy, torch.Tensor):
             action_policy = action_policy.detach().cpu().numpy()
         
-        # action_policy = np.clip(action_policy, -4, 4)
+        action_policy = np.clip(action_policy, -3, 3)
         # model action order
         target_dof_pos = action_policy * self.action_scale + self.default_angles
         # policy action order used for next step
@@ -148,7 +148,7 @@ class Go2Controller:
         if isinstance(action_policy, torch.Tensor):
             action_policy = action_policy.detach().cpu().numpy()
 
-        # action_policy = np.clip(action_policy, -4, 4)
+        action_policy = np.clip(action_policy, -3, 3)
         # model action order
         target_dof_pos = action_policy * self.action_scale + self.default_angles
         # policy action order used for next step

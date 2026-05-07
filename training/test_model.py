@@ -264,8 +264,8 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    # parser.add_argument('--controller_path', type=str, default='training/models/actor_init.zip', help='Path to SB3 .zip or .pt file containing the trained policy')
-    parser.add_argument('--controller_path', type=str, default='training/models/run_offline_new2_round3/best.policy.pt')
+    parser.add_argument('--controller_path', type=str, default='training/models/actor_init.zip', help='Path to SB3 .zip or .pt file containing the trained policy')
+    # parser.add_argument('--controller_path', type=str, default='training/models/run_offline_new3_round4/best.policy.pt')
     parser.add_argument('--critical_threshold', type=float, default=0.8, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--worker_id', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=100)

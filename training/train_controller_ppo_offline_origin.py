@@ -55,54 +55,20 @@ def main():
     parser.add_argument('--max_steps', type=int, default=30)
     parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
     parser.add_argument('--out', type=str, default='training/models/')
-    parser.add_argument('--run_name', type=str, default='run_offline_round1', help='Subdirectory name for this training run')
+    parser.add_argument('--run_name', type=str, default='run_offline_new3_round4', help='Subdirectory name for this training run')
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
-    parser.add_argument('--initial', default='training/models/actor_init.zip')
-    # parser.add_argument('--initial', default='training/models/run_offline_new2_round2/best.policy.pt')
-    parser.add_argument('--log_std', type=float, default=-0.0,
-                        help='Initial log_std for policy distribution (per-dim, trainable). '
-                             '-1 ~= std 0.37 is a good middle ground for Go2 normalized joint actions: '
-                             '-2 (std~=0.135) was too tight and caused uniform upward drift; '
-                             '0 (std=1.0) is too loose and slows mean learning.')
-    parser.add_argument('--log_std_min', type=float, default=-4.0, help='Lower clamp on trainable log_std during loss computation.')
-    parser.add_argument('--log_std_max', type=float, default=1.0, help='Upper clamp on trainable log_std during loss computation.')
-    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round1_std0'], help='Path to offline dataset directory')
-    parser.add_argument('--offline_epochs', type=int, default=200, help='Epochs for offline training')
+    # parser.add_argument('--initial', default='training/models/actor_init.zip')
+    parser.add_argument('--initial', default='training/models/run_offline_new3_round3/best.policy.pt')
+    parser.add_argument('--log_std', type=float, default=-2, help='Initial log std for policy distribution')
+    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round4'], help='Path to offline dataset directory')
+    parser.add_argument('--offline_epochs', type=int, default=100, help='Epochs for offline training')
     parser.add_argument('--offline_batch_size', type=int, default=2048)
     parser.add_argument('--offline_lr', type=float, default=1e-4)
     parser.add_argument('--value_coef', type=float, default=1.0, help='Weight for value regression loss during offline training')
     parser.add_argument('--train_value_net_only', action='store_true', help='Only train value net during offline training (policy net weights will be frozen)')
     parser.add_argument('--use_initial_optimizer', action='store_true', help='Whether to load optimizer state from initial .pt file if available (ignored if initial is SB3 .zip)')
-    # AWAC/AWR + stability
-    parser.add_argument('--awac_beta', type=float, default=1.0,
-                        help='AWAC/AWR temperature. Smaller -> sharper exploitation of high-adv samples; larger -> more uniform.')
-    parser.add_argument('--awac_weight_max', type=float, default=20.0,
-                        help='Upper clip for exp(adv/beta) to prevent exploding weights.')
-    parser.add_argument('--max_grad_norm', type=float, default=0.5,
-                        help='Max grad norm for clipping.')
-    parser.add_argument('--bc_coef', type=float, default=0.1,
-                        help='Behavior-cloning regularizer weight (KL-to-behavior proxy under fixed log_std). Set 0 to disable.')
-    # Value warmup / validation / early stopping
-    parser.add_argument('--value_warmup_epochs', type=int, default=20,
-                        help='Train value net only for the first N epochs, then jointly train policy+value. Ignored if --train_value_net_only.')
-    parser.add_argument('--val_split', type=float, default=0.1,
-                        help='Fraction of offline dataset held out for validation. 0 disables validation.')
-    parser.add_argument('--early_stop_patience', type=int, default=0,
-                        help='Early stop after N non-improving val epochs. 0 disables.')
-    # Robustness against outlier samples in value regression & advantage weighting
-    parser.add_argument('--reset_value_net', action='store_true', default=True,
-                        help='Re-init value_net after copying pretrained weights. Recommended when '
-                             'the pretrained checkpoint was trained on a different return scale.')
-    parser.add_argument('--value_loss', type=str, default='huber', choices=['mse', 'huber'],
-                        help='Value regression loss. Huber caps gradient on outliers.')
-    parser.add_argument('--huber_delta', type=float, default=1.0,
-                        help='Huber loss delta (|error|>delta switches from quadratic to linear).')
-    parser.add_argument('--combined_weight_max', type=float, default=5.0,
-                        help='Cap on (awac_w * b_weights) per sample to prevent outlier domination.')
-    parser.add_argument('--debug_first_batch', action='store_true', default=True,
-                        help='Print min/max/percentiles of dataset tensors and first batch stats.')
     args = parser.parse_args()
     args.out = os.path.join(args.out, args.run_name)
     print(args)
@@ -204,27 +170,13 @@ def main():
 
         model.policy.load_state_dict(policy_sd)
         print(f'Initialized policy from {args.initial} — matched {len(matched)} tensors')
-
-        # Re-init value_net if requested: pretrained value head is likely on a different
-        # return scale (e.g. actor_init.zip trained against different rewards), producing
-        # extreme outputs that dominate val_loss with outliers.
-        if args.reset_value_net:
-            import torch.nn as _nn
-            reset_count = 0
-            modules_to_reset = list(model.policy.mlp_extractor.value_net.modules()) + [model.policy.value_net]
-            for m in modules_to_reset:
-                if isinstance(m, _nn.Linear):
-                    _nn.init.orthogonal_(m.weight, gain=1.0)
-                    if m.bias is not None:
-                        _nn.init.zeros_(m.bias)
-                    reset_count += 1
-            print(f'Reset {reset_count} value_net Linear layers (orthogonal init, zero bias)')
+        # Initialize/override policy log_std so it's not zero (trainable if possible)
 
     if args.log_std is not None:
         try:
             with torch.no_grad():
                 model.policy.log_std.fill_(args.log_std)
-        except Exception:
+        except:
             pass
 
     def load_offline_dataset(data_dirs):
@@ -306,211 +258,129 @@ def main():
         returns_t = torch.tensor(all_returns, dtype=torch.float32)
         weights_t = torch.tensor(all_weights, dtype=torch.float32)
         weights_t = weights_t / (weights_t.mean() + 1e-8)
-        weights_t = torch.clamp(weights_t, max=10.0)
         log_prob_t = torch.tensor(all_log_prob, dtype=torch.float32)
         print(f'Loaded offline dataset with {len(obs_t)} samples from {len(data_dirs)} directories')
-
-        if args.debug_first_batch:
-            def _stats(name, t):
-                q = torch.quantile(t, torch.tensor([0.0, 0.5, 0.9, 0.99, 1.0])).tolist()
-                print(f'  {name:10s} shape={tuple(t.shape)} '
-                      f'min={q[0]:.4f} p50={q[1]:.4f} p90={q[2]:.4f} p99={q[3]:.4f} max={q[4]:.4f} '
-                      f'mean={t.mean().item():.4f} std={t.std().item():.4f}')
-            print('[dataset stats]')
-            _stats('returns', returns_t)
-            _stats('weights', weights_t)
-            _stats('log_prob', log_prob_t)
-            # per-dim action range (helps judge if log_std is reasonable)
-            print(f'  actions   min={acts_t.min().item():.4f} max={acts_t.max().item():.4f} '
-                  f'per-dim std={acts_t.std(dim=0).mean().item():.4f}')
-
         return obs_t, acts_t, returns_t, weights_t, log_prob_t
 
     def offline_train_policy(model, dataset_path, epochs, batch_size, lr, value_coef, device='cpu'):
-        from torch.utils.data import TensorDataset, DataLoader, random_split
-
+        from torch.utils.data import TensorDataset, DataLoader
         obs_t, acts_t, returns_t, weights_t, log_prob_t = load_offline_dataset(dataset_path)
         ds = TensorDataset(obs_t, acts_t, returns_t, weights_t, log_prob_t)
+        # Use WeightedRandomSampler to sample according to dataset weights
+        from torch.utils.data import WeightedRandomSampler
 
-        # Train/val split: used to (a) select best checkpoint on val, (b) drive early stopping.
-        n_total = len(ds)
-        n_val = int(n_total * args.val_split) if args.val_split > 0 else 0
-        n_train = n_total - n_val
-        if n_val > 0:
-            train_ds, val_ds = random_split(
-                ds, [n_train, n_val],
-                generator=torch.Generator().manual_seed(42),
-            )
-            train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-            val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
-        else:
-            train_dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
-            val_dl = None
-        print(f'[Offline] train samples={n_train}, val samples={n_val}')
+        sample_weights = weights_t.clone().float()
+
+        # if sample_weights.sum().item() <= 0:
+        #     # fallback to uniform sampling
+        #     dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
+        # else:
+        #     sampler = WeightedRandomSampler(weights=sample_weights.cpu(), num_samples=len(sample_weights), replacement=True)
+        #     dl = DataLoader(ds, batch_size=batch_size, sampler=sampler)
+        
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
 
         policy = model.policy
+        # Prefer to use mlp_extractor.policy_net/value_net and action_net/value_net heads
         params = [p for p in policy.parameters() if p.requires_grad]
         optim = torch.optim.Adam(params, lr=lr)
         if args.initial.endswith('.pt') and args.use_initial_optimizer:
             if "optimizer_state_dict" in state_dict.keys():
                 optim.load_state_dict(state_dict["optimizer_state_dict"])
                 print(f'Loaded optimizer state from {args.initial}')
-
+        
         if args.train_value_net_only:
             for name, param in policy.named_parameters():
                 if 'value' not in name:
                     param.requires_grad = False
             print('Training value net only, policy net weights frozen.')
 
-        _debug_state = {'printed': False}
+        min_loss = float('inf')
+        for ep in range(1, epochs+1):
+            epoch_loss = 0.0
+            for b_obs, b_act, b_ret, b_weights, b_log_prob in dl:
+                b_obs = b_obs.to(device)
+                b_act = b_act.to(device)
+                b_ret = b_ret.to(device)
+                b_weights = b_weights.to(device)
+                b_log_prob = b_log_prob.to(device)
 
-        def compute_batch_loss(batch, in_warmup: bool):
-            b_obs, b_act, b_ret, b_weights, b_log_prob = [t.to(device) for t in batch]
+                # forward through policy pi head
+                latent_pi = policy.mlp_extractor.policy_net(b_obs)
+                pred_act = policy.action_net(latent_pi)
 
-            # Forward
-            latent_pi = policy.mlp_extractor.policy_net(b_obs)
-            pred_act = policy.action_net(latent_pi)
-            latent_v = policy.mlp_extractor.value_net(b_obs)
-            pred_val = policy.value_net(latent_v).squeeze(-1)
+                # value prediction
+                latent_v = policy.mlp_extractor.value_net(b_obs)
+                pred_val = policy.value_net(latent_v).squeeze(-1).clamp(min=-1.0, max=0.0)
 
-            # Value loss: Huber/MSE, robust to outliers
-            if args.value_loss == 'huber':
-                val_per_sample = F.smooth_l1_loss(pred_val, b_ret, reduction='none', beta=args.huber_delta)
-            else:
-                val_per_sample = F.mse_loss(pred_val, b_ret, reduction='none')
-            val_loss = (val_per_sample * b_weights).mean()
+                # value loss (per-sample) and weight by dataset sample weight b_weights
+                val_loss = F.mse_loss(pred_val, b_ret)
+                # val_loss = (val_per_sample * b_weights).mean()
 
-            # Per-batch normalized advantage for stable AWAC weights
-            adv = b_ret - pred_val.detach()
-            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+                # advantage (returns - value)
+                adv = (b_ret - pred_val.detach())
+                # adv_pos = torch.clamp(adv, min=0.0)
+                # if adv_pos.sum() > 0:
+                #     adv_pos = adv_pos / (adv_pos.mean() + 1e-8)
+                #     adv_pos = torch.clamp(adv_pos, max=3.0)
 
-            # AWAC / AWR exponential advantage weights (no importance ratio)
-            awac_w = torch.exp(adv / args.awac_beta).clamp(max=args.awac_weight_max)
+                # Build action distribution from predicted mean and a trainable policy log-std when available
+                log_std = args.log_std * torch.ones_like(pred_act) # policy.log_std
 
-            # Combine AWAC weight with dataset weight, then cap the combined product so
-            # no single sample dominates the batch gradient.
-            combined_w = (awac_w * b_weights).clamp(max=args.combined_weight_max)
+                # if log_std.dim() == 1:
+                #     log_std = log_std.unsqueeze(0).expand(pred_act.shape[0], -1)
+                # elif log_std.shape[0] != pred_act.shape[0]:
+                #     log_std = log_std.expand(pred_act.shape[0], -1)
 
-            # log-prob under current policy with trainable per-dim log_std.
-            log_std = torch.clamp(policy.log_std, min=args.log_std_min, max=args.log_std_max)
-            log_std = log_std.expand_as(pred_act)
-            std = torch.exp(log_std)
-            dist = torch.distributions.Normal(pred_act, std)
-            logp = dist.log_prob(b_act).sum(dim=1)
+                # numeric protection: clamp log_std and std to stable ranges
+                # log_std = torch.clamp(log_std, min=-20.0, max=2.0)
+                std = torch.exp(log_std)
+                # std = torch.clamp(std, min=1e-3, max=1e2)
 
-            # AWAC/AWR policy loss
-            policy_loss = -(combined_w * logp).mean()
+                dist = torch.distributions.Normal(pred_act, std)
+                # joint log-prob over action dimensions
+                logp = dist.log_prob(b_act).sum(dim=1)
 
-            # KL-to-behavior under fixed std ~ scaled action MSE; trust-region regularizer
-            bc_per_sample = ((pred_act - b_act) ** 2).sum(dim=1)
-            bc_loss = (bc_per_sample * b_weights.clamp(max=args.combined_weight_max)).mean()
+                # Ensure stored behavior log_prob is joint (sum per-dim if necessary)
+                if b_log_prob.dim() > 1:
+                    b_log_prob = b_log_prob.sum(dim=1)
 
-            if args.train_value_net_only or in_warmup:
-                total = val_loss
-            else:
-                total = policy_loss + value_coef * val_loss + args.bc_coef * bc_loss
+                # Use stored behavior log_prob for importance correction if available
+                # compute importance ratio r = exp(logp - log_behavior) with stabilization
+                log_ratio = logp - b_log_prob
+                imp_ratio = torch.exp(log_ratio.detach())
+                combined_w = adv * imp_ratio
 
-            # One-shot diagnostic on the very first batch
-            if args.debug_first_batch and not _debug_state['printed']:
-                _debug_state['printed'] = True
-                with torch.no_grad():
-                    print('[first-batch debug]')
-                    print(f'  pred_val  min={pred_val.min().item():.3f} max={pred_val.max().item():.3f} '
-                          f'mean={pred_val.mean().item():.3f}')
-                    print(f'  b_ret     min={b_ret.min().item():.3f} max={b_ret.max().item():.3f} '
-                          f'mean={b_ret.mean().item():.3f}')
-                    print(f'  b_weights min={b_weights.min().item():.3f} max={b_weights.max().item():.3f} '
-                          f'mean={b_weights.mean().item():.3f}')
-                    print(f'  awac_w    min={awac_w.min().item():.3f} max={awac_w.max().item():.3f} '
-                          f'mean={awac_w.mean().item():.3f}')
-                    print(f'  combined  min={combined_w.min().item():.3f} max={combined_w.max().item():.3f} '
-                          f'mean={combined_w.mean().item():.3f}')
-                    print(f'  val/s     min={val_per_sample.min().item():.3f} max={val_per_sample.max().item():.3f} '
-                          f'mean={val_per_sample.mean().item():.3f}')
-                    print(f'  logp      min={logp.min().item():.2f} max={logp.max().item():.2f} '
-                          f'mean={logp.mean().item():.2f}')
+                # if combined_w.sum() > 0:
+                #     combined_w = combined_w / (combined_w.mean() + 1e-8)
+                combined_w = torch.clamp(combined_w, min=-3.0, max=3.0)
 
-            return total, policy_loss.detach(), val_loss.detach(), bc_loss.detach()
+                # maximize weighted log-prob -> minimize negative weighted log-prob
+                # also multiply by dataset sample weight b_weights
+                weighted_logp = - combined_w * logp * b_weights
+                policy_loss = weighted_logp.mean()
 
-        min_val_metric = float('inf')
-        min_train_metric = float('inf')
-        patience = 0
+                if args.train_value_net_only:
+                    loss = val_loss
+                else:
+                    loss = policy_loss + value_coef * val_loss
 
-        for ep in range(1, epochs + 1):
-            in_warmup = (not args.train_value_net_only) and (ep <= args.value_warmup_epochs)
-
-            # ---- Train ----
-            policy.train()
-            ep_total = ep_pi = ep_v = ep_bc = 0.0
-            n_batch = 0
-            for batch in train_dl:
-                total, pi_l, v_l, bc_l = compute_batch_loss(batch, in_warmup)
                 optim.zero_grad()
-                total.backward()
-                torch.nn.utils.clip_grad_norm_(params, max_norm=args.max_grad_norm)
+                loss.backward()
                 optim.step()
 
-                ep_total += float(total.item())
-                ep_pi += float(pi_l.item())
-                ep_v += float(v_l.item())
-                ep_bc += float(bc_l.item())
-                n_batch += 1
+                epoch_loss += float(loss.item())
 
-            train_avg = ep_total / max(1, n_batch)
-            pi_avg = ep_pi / max(1, n_batch)
-            v_avg = ep_v / max(1, n_batch)
-            bc_avg = ep_bc / max(1, n_batch)
-
-            # ---- Validation ----
-            val_avg = None
-            if val_dl is not None:
-                policy.eval()
-                v_sum, v_n = 0.0, 0
-                with torch.no_grad():
-                    for batch in val_dl:
-                        total, _, _, _ = compute_batch_loss(batch, in_warmup)
-                        v_sum += float(total.item())
-                        v_n += 1
-                val_avg = v_sum / max(1, v_n)
-
-            with torch.no_grad():
-                ls = policy.log_std.detach().cpu().numpy()
-            ls_summary = f'log_std[min/mean/max]={ls.min():.3f}/{ls.mean():.3f}/{ls.max():.3f}'
-
-            tag = '[warmup]' if in_warmup else '[train] '
-            if val_avg is not None:
-                print(f'[Offline]{tag} ep={ep}/{epochs} train={train_avg:.6f} val={val_avg:.6f} '
-                      f'pi={pi_avg:.6f} v={v_avg:.6f} bc={bc_avg:.6f} {ls_summary}')
-            else:
-                print(f'[Offline]{tag} ep={ep}/{epochs} train={train_avg:.6f} '
-                      f'pi={pi_avg:.6f} v={v_avg:.6f} bc={bc_avg:.6f} {ls_summary}')
-
-            # ---- Best checkpoint selection (prefer val; fallback to train) ----
-            # During warmup the "loss" is just value loss, so use separate tracking so a strong
-            # value warmup doesn't overwrite a later best-joint checkpoint trivially.
-            sel_metric = val_avg if val_avg is not None else train_avg
-            if val_avg is not None:
-                improved = sel_metric < min_val_metric
-                if improved:
-                    min_val_metric = sel_metric
-            else:
-                improved = sel_metric < min_train_metric
-                if improved:
-                    min_train_metric = sel_metric
-
-            if improved:
-                save_to = os.path.join(args.out, 'best.policy.pt')
+            avg = epoch_loss / (len(dl) if len(dl) > 0 else 1)
+            print(f'[Offline] epoch={ep}/{epochs} loss={avg:.6f}')
+            # print('log_std:', policy.log_std.data.cpu().numpy())
+            if avg < min_loss:
+                min_loss = avg
+                save_to = os.path.join(args.out, f'best.policy.pt')
                 safe_model_save(model, save_to, verbose=0, optimizer=optim)
-                src = 'val' if val_avg is not None else 'train'
-                print(f'[Offline] new best @ ep {ep} ({src}={sel_metric:.6f})')
-                patience = 0
-            else:
-                patience += 1
-                if args.early_stop_patience > 0 and patience >= args.early_stop_patience:
-                    print(f'[Offline] early stop at ep {ep} (no improvement for {patience} epochs)')
-                    break
+                print(f'[Offline] new best model at epoch {ep} with loss {avg:.6f}')
 
-            # Per-epoch checkpoint (kept on user request)
+            # save final offline-updated policy (include optimizer state)
             try:
                 save_to = os.path.join(args.out, f'ep{ep}.policy.pt')
                 safe_model_save(model, save_to, verbose=0, optimizer=optim)
