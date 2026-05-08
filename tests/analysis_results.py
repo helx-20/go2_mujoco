@@ -33,8 +33,7 @@ def analyze(path):
             # print([data[i] for i in range(len(data)) if data[i] > 0])
             if max(data) > 1:
                 print(max(data))
-            else:
-                crashes.extend(data)
+            crashes.extend(data)
         except:
             continue
     np.save("/home/linxuan/Embodied/go2_mujoco/results/nade_all.npy", np.array(crashes[:200000]))

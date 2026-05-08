@@ -61,46 +61,79 @@ def main():
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
     parser.add_argument('--initial', default='training/models/actor_init.zip')
     # parser.add_argument('--initial', default='training/models/run_offline_new2_round2/best.policy.pt')
-    parser.add_argument('--log_std', type=float, default=-0.0,
+    parser.add_argument('--log_std', type=float, default=-1.0,
                         help='Initial log_std for policy distribution (per-dim, trainable). '
-                             '-1 ~= std 0.37 is a good middle ground for Go2 normalized joint actions: '
-                             '-2 (std~=0.135) was too tight and caused uniform upward drift; '
-                             '0 (std=1.0) is too loose and slows mean learning.')
+                             '-1 (std ~= 0.37) matches the collection-time setting and keeps the '
+                             'policy sharp enough for AWAC gradient on the mean to be strong. '
+                             'Extreme logp on outlier data points is bounded by max_grad_norm clipping.')
     parser.add_argument('--log_std_min', type=float, default=-4.0, help='Lower clamp on trainable log_std during loss computation.')
     parser.add_argument('--log_std_max', type=float, default=1.0, help='Upper clamp on trainable log_std during loss computation.')
-    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round1_std0'], help='Path to offline dataset directory')
-    parser.add_argument('--offline_epochs', type=int, default=200, help='Epochs for offline training')
+    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round1', '/mnt/mnt1/linxuan/go2_data/data/training/round1_append'], help='Path to offline dataset directory')
+    parser.add_argument('--offline_epochs', type=int, default=50, help='Epochs for offline training')
     parser.add_argument('--offline_batch_size', type=int, default=2048)
     parser.add_argument('--offline_lr', type=float, default=1e-4)
-    parser.add_argument('--value_coef', type=float, default=1.0, help='Weight for value regression loss during offline training')
     parser.add_argument('--train_value_net_only', action='store_true', help='Only train value net during offline training (policy net weights will be frozen)')
     parser.add_argument('--use_initial_optimizer', action='store_true', help='Whether to load optimizer state from initial .pt file if available (ignored if initial is SB3 .zip)')
     # AWAC/AWR + stability
     parser.add_argument('--awac_beta', type=float, default=1.0,
-                        help='AWAC/AWR temperature. Smaller -> sharper exploitation of high-adv samples; larger -> more uniform.')
+                        help='AWAC/AWR temperature. Smaller -> sharper exploitation of high-adv samples; larger -> more uniform. '
+                             'beta=1 keeps meaningful discrimination between good/bad samples; '
+                             'combined_weight_max already caps outliers, so no need to soften further.')
     parser.add_argument('--awac_weight_max', type=float, default=20.0,
                         help='Upper clip for exp(adv/beta) to prevent exploding weights.')
-    parser.add_argument('--max_grad_norm', type=float, default=0.5,
+    parser.add_argument('--max_grad_norm', type=float, default=1.0,
                         help='Max grad norm for clipping.')
-    parser.add_argument('--bc_coef', type=float, default=0.1,
+    parser.add_argument('--bc_coef', type=float, default=0.5,
                         help='Behavior-cloning regularizer weight (KL-to-behavior proxy under fixed log_std). Set 0 to disable.')
+    parser.add_argument('--value_coef', type=float, default=50.0,
+                        help='Weight for value regression loss during joint training. '
+                             'Needs to be large because policy_loss is O(10) while value_loss is O(0.04).')
     # Value warmup / validation / early stopping
-    parser.add_argument('--value_warmup_epochs', type=int, default=20,
+    parser.add_argument('--value_warmup_epochs', type=int, default=10,
                         help='Train value net only for the first N epochs, then jointly train policy+value. Ignored if --train_value_net_only.')
     parser.add_argument('--val_split', type=float, default=0.1,
                         help='Fraction of offline dataset held out for validation. 0 disables validation.')
     parser.add_argument('--early_stop_patience', type=int, default=0,
                         help='Early stop after N non-improving val epochs. 0 disables.')
     # Robustness against outlier samples in value regression & advantage weighting
-    parser.add_argument('--reset_value_net', action='store_true', default=True,
-                        help='Re-init value_net after copying pretrained weights. Recommended when '
-                             'the pretrained checkpoint was trained on a different return scale.')
+    parser.add_argument('--reset_value_net', action='store_true', default=False,
+                        help='Re-init value_net after copying pretrained weights. Disabled by default '
+                             'because actor_init.zip never trained its value_net (it was created '
+                             'purely for action pretraining), so weights are already random -- '
+                             'overwriting them with orthogonal init adds nothing.')
     parser.add_argument('--value_loss', type=str, default='huber', choices=['mse', 'huber'],
                         help='Value regression loss. Huber caps gradient on outliers.')
     parser.add_argument('--huber_delta', type=float, default=1.0,
-                        help='Huber loss delta (|error|>delta switches from quadratic to linear).')
+                        help='Huber loss delta (|error|>delta switches from quadratic to linear). '
+                             'For returns in [-1,0], delta=1 behaves like MSE for most samples and '
+                             'only clips rare extreme errors -- keeps value gradient strong enough to learn.')
     parser.add_argument('--combined_weight_max', type=float, default=5.0,
                         help='Cap on (awac_w * b_weights) per sample to prevent outlier domination.')
+    parser.add_argument('--use_weighted_sampler', default=True,
+                        help='Use WeightedRandomSampler so each batch over-represents high-weight (rare critical) '
+                             'samples. Reduces gradient variance on the important tail. When enabled, in-loss '
+                             'b_weights reweighting is removed (sampler already encodes the distribution).')
+    parser.add_argument('--filter_awac', default=True,
+                        help='In filter-BC mode, additionally weight kept samples by exp(adv/beta). This reuses '
+                             'the value function to prioritize the best non-crash samples without imitating crashes.')
+    parser.add_argument('--oob_coef', type=float, default=1,
+                        help='Coefficient on the out-of-bounds soft penalty on pred_act. Zero-gradient inside '
+                             '[-oob_bound, +oob_bound], quadratic outside. Keeps MLP extrapolation in check on '
+                             'OOD states without hard-clipping gradients inside the data range. Set 0 to disable.')
+    parser.add_argument('--oob_bound', type=float, default=5.0,
+                        help='Action magnitude above which the OOB penalty engages. Dataset actions are within '
+                             '[-5, 5], so 5 is the natural choice.')
+    # filter-BC baseline: skip AWAC entirely, BC only on samples with return above threshold.
+    # Motivation: with sparse binary rewards (return in {-1, 0}) and small data, AWAC's
+    # advantage-weighted logp has low SNR. Filter-BC reduces the signal to "imitate only
+    # non-crash trajectories" which is a stronger baseline under these conditions.
+    parser.add_argument('--filter_bc', default=True,
+                        help='Replace AWAC policy loss with filter-BC: BC only on samples with b_ret > --filter_return_threshold. '
+                             'Value net still trains normally so it is available for downstream PPO. '
+                             'Default True; pass --no-filter_bc to fall back to AWAC.')
+    parser.add_argument('--filter_return_threshold', type=float, default=-0.5,
+                        help='Keep samples with b_ret > this threshold for filter-BC. '
+                             'With returns in {-1, 0}, default -0.5 keeps all non-crash samples and drops crashes.')
     parser.add_argument('--debug_first_batch', action='store_true', default=True,
                         help='Print min/max/percentiles of dataset tensors and first batch stats.')
     args = parser.parse_args()
@@ -205,20 +238,19 @@ def main():
         model.policy.load_state_dict(policy_sd)
         print(f'Initialized policy from {args.initial} — matched {len(matched)} tensors')
 
-        # Re-init value_net if requested: pretrained value head is likely on a different
-        # return scale (e.g. actor_init.zip trained against different rewards), producing
-        # extreme outputs that dominate val_loss with outliers.
+        # Re-init value head only: pretrained scalar head was trained against a different
+        # return scale, so its bias/scaling is wrong. Keep the shared feature extractor
+        # (mlp_extractor.value_net) so warmup doesn't have to re-learn representations from scratch.
         if args.reset_value_net:
             import torch.nn as _nn
             reset_count = 0
-            modules_to_reset = list(model.policy.mlp_extractor.value_net.modules()) + [model.policy.value_net]
-            for m in modules_to_reset:
+            for m in model.policy.value_net.modules():
                 if isinstance(m, _nn.Linear):
-                    _nn.init.orthogonal_(m.weight, gain=1.0)
+                    _nn.init.orthogonal_(m.weight, gain=0.01)
                     if m.bias is not None:
                         _nn.init.zeros_(m.bias)
                     reset_count += 1
-            print(f'Reset {reset_count} value_net Linear layers (orthogonal init, zero bias)')
+            print(f'Reset {reset_count} Linear layers in value head (mlp_extractor.value_net features preserved)')
 
     if args.log_std is not None:
         try:
@@ -336,16 +368,38 @@ def main():
         n_total = len(ds)
         n_val = int(n_total * args.val_split) if args.val_split > 0 else 0
         n_train = n_total - n_val
+        from torch.utils.data import WeightedRandomSampler
+
+        def _make_train_loader(train_ds_):
+            """Build training dataloader. If weighted sampling is enabled, sample with
+            replacement proportional to b_weights so each batch over-represents rare
+            high-weight samples. When sampler is used, shuffle is disabled."""
+            if args.use_weighted_sampler:
+                # train_ds_ may be a Subset; pull the underlying weights tensor for its indices
+                if hasattr(train_ds_, 'indices'):
+                    w_tensor = ds.tensors[3][train_ds_.indices]
+                else:
+                    w_tensor = ds.tensors[3]
+                w_sample = w_tensor.clamp(min=1e-3).double()
+                sampler = WeightedRandomSampler(
+                    weights=w_sample, num_samples=len(train_ds_), replacement=True
+                )
+                return DataLoader(train_ds_, batch_size=batch_size, sampler=sampler)
+            else:
+                return DataLoader(train_ds_, batch_size=batch_size, shuffle=True)
+
         if n_val > 0:
             train_ds, val_ds = random_split(
                 ds, [n_train, n_val],
                 generator=torch.Generator().manual_seed(42),
             )
-            train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+            train_dl = _make_train_loader(train_ds)
             val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
         else:
-            train_dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
+            train_dl = _make_train_loader(ds)
             val_dl = None
+        if args.use_weighted_sampler:
+            print('[Offline] using WeightedRandomSampler; in-loss b_weights reweighting disabled.')
         print(f'[Offline] train samples={n_train}, val samples={n_val}')
 
         policy = model.policy
@@ -364,6 +418,50 @@ def main():
 
         _debug_state = {'printed': False}
 
+        # Frozen snapshot of the original (pretrained) policy for action-drift diagnostic.
+        # Copy the current policy's state_dict right after pretrain loading so it captures
+        # the init-time actor weights, then freeze.
+        import copy as _copy
+        orig_policy_snapshot = _copy.deepcopy(policy).to(device).eval()
+        for p in orig_policy_snapshot.parameters():
+            p.requires_grad = False
+
+        def action_diff_on_loader(loader):
+            """Return (mse, mean_abs, max_abs, per_dim_std_ratio) between new and orig policy
+            predicted actions, computed over `loader`. Averaged over samples."""
+            if loader is None:
+                return None
+            policy.eval()
+            sq_sum = 0.0
+            abs_sum = 0.0
+            max_abs = 0.0
+            n_tot = 0
+            new_acts_chunks = []
+            orig_acts_chunks = []
+            with torch.no_grad():
+                for batch in loader:
+                    b_obs = batch[0].to(device)
+                    # new policy pred
+                    lat_new = policy.mlp_extractor.policy_net(b_obs)
+                    a_new = policy.action_net(lat_new)
+                    # orig policy pred (frozen)
+                    lat_o = orig_policy_snapshot.mlp_extractor.policy_net(b_obs)
+                    a_orig = orig_policy_snapshot.action_net(lat_o)
+                    d = a_new - a_orig
+                    sq_sum += float((d * d).sum().item())
+                    abs_sum += float(d.abs().sum().item())
+                    max_abs = max(max_abs, float(d.abs().max().item()))
+                    n_tot += b_obs.shape[0] * a_new.shape[1]
+                    new_acts_chunks.append(a_new.detach().cpu())
+                    orig_acts_chunks.append(a_orig.detach().cpu())
+            mse = sq_sum / max(1, n_tot)
+            mae = abs_sum / max(1, n_tot)
+            # action std ratio (per-dim): indicates whether new policy collapsed or expanded vs orig
+            new_all = torch.cat(new_acts_chunks, dim=0)
+            orig_all = torch.cat(orig_acts_chunks, dim=0)
+            std_ratio = float((new_all.std(dim=0) / (orig_all.std(dim=0) + 1e-8)).mean().item())
+            return mse, mae, max_abs, std_ratio
+
         def compute_batch_loss(batch, in_warmup: bool):
             b_obs, b_act, b_ret, b_weights, b_log_prob = [t.to(device) for t in batch]
 
@@ -373,23 +471,19 @@ def main():
             latent_v = policy.mlp_extractor.value_net(b_obs)
             pred_val = policy.value_net(latent_v).squeeze(-1)
 
+            # When using WeightedRandomSampler, samples are already drawn proportional to
+            # b_weights, so the per-sample loss weight becomes 1 (double-counting otherwise).
+            if args.use_weighted_sampler:
+                loss_w = torch.ones_like(b_weights)
+            else:
+                loss_w = b_weights
+
             # Value loss: Huber/MSE, robust to outliers
             if args.value_loss == 'huber':
                 val_per_sample = F.smooth_l1_loss(pred_val, b_ret, reduction='none', beta=args.huber_delta)
             else:
                 val_per_sample = F.mse_loss(pred_val, b_ret, reduction='none')
-            val_loss = (val_per_sample * b_weights).mean()
-
-            # Per-batch normalized advantage for stable AWAC weights
-            adv = b_ret - pred_val.detach()
-            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
-
-            # AWAC / AWR exponential advantage weights (no importance ratio)
-            awac_w = torch.exp(adv / args.awac_beta).clamp(max=args.awac_weight_max)
-
-            # Combine AWAC weight with dataset weight, then cap the combined product so
-            # no single sample dominates the batch gradient.
-            combined_w = (awac_w * b_weights).clamp(max=args.combined_weight_max)
+            val_loss = (val_per_sample * loss_w).mean()
 
             # log-prob under current policy with trainable per-dim log_std.
             log_std = torch.clamp(policy.log_std, min=args.log_std_min, max=args.log_std_max)
@@ -398,17 +492,66 @@ def main():
             dist = torch.distributions.Normal(pred_act, std)
             logp = dist.log_prob(b_act).sum(dim=1)
 
-            # AWAC/AWR policy loss
-            policy_loss = -(combined_w * logp).mean()
-
-            # KL-to-behavior under fixed std ~ scaled action MSE; trust-region regularizer
             bc_per_sample = ((pred_act - b_act) ** 2).sum(dim=1)
-            bc_loss = (bc_per_sample * b_weights.clamp(max=args.combined_weight_max)).mean()
+
+            if args.filter_bc:
+                # Filter-BC: imitate only high-return (non-crash) samples.
+                keep = (b_ret > args.filter_return_threshold).float()
+
+                if args.filter_awac:
+                    # Hybrid: inside kept samples, weight by exp(adv/beta) so better-than-V
+                    # non-crash samples pull harder. Crash samples remain zeroed by keep=0.
+                    adv = b_ret - pred_val.detach()
+                    # Normalize using only kept samples so the scale is meaningful.
+                    if keep.sum() > 1:
+                        kept_adv = adv[keep.bool()]
+                        adv_norm = (adv - kept_adv.mean()) / (kept_adv.std() + 1e-8)
+                    else:
+                        adv_norm = adv
+                    awac_w = torch.exp(adv_norm / args.awac_beta).clamp(max=args.awac_weight_max)
+                else:
+                    awac_w = torch.ones_like(b_ret)
+
+                w_keep = (awac_w * loss_w * keep).clamp(max=args.combined_weight_max)
+                denom = w_keep.sum().clamp(min=1.0)
+
+                policy_loss = -(w_keep * logp).sum() / denom
+                bc_loss = (w_keep * bc_per_sample).sum() / denom
+
+                combined_w = w_keep
+            else:
+                # Per-batch normalized advantage for stable AWAC weights
+                adv = b_ret - pred_val.detach()
+                adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+
+                # AWAC / AWR exponential advantage weights (no importance ratio)
+                awac_w = torch.exp(adv / args.awac_beta).clamp(max=args.awac_weight_max)
+
+                # Combine AWAC weight with loss_w, then cap the combined product so
+                # no single sample dominates the batch gradient.
+                combined_w = (awac_w * loss_w).clamp(max=args.combined_weight_max)
+
+                # AWAC/AWR policy loss
+                policy_loss = -(combined_w * logp).mean()
+
+                # KL-to-behavior under fixed std ~ scaled action MSE; trust-region regularizer
+                bc_loss = (bc_per_sample * loss_w.clamp(max=args.combined_weight_max)).mean()
+
+            # Out-of-bounds soft penalty: discourages pred_act from extrapolating outside the
+            # data range on OOD states. Zero inside [-bound, +bound], quadratic outside.
+            if args.oob_coef > 0:
+                over = (pred_act.abs() - args.oob_bound).clamp(min=0.0)
+                oob_loss = (over * over).sum(dim=1).mean()
+            else:
+                oob_loss = torch.zeros((), device=pred_act.device)
 
             if args.train_value_net_only or in_warmup:
                 total = val_loss
             else:
-                total = policy_loss + value_coef * val_loss + args.bc_coef * bc_loss
+                total = (policy_loss
+                         + value_coef * val_loss
+                         + args.bc_coef * bc_loss
+                         + args.oob_coef * oob_loss)
 
             # One-shot diagnostic on the very first batch
             if args.debug_first_batch and not _debug_state['printed']:
@@ -430,7 +573,7 @@ def main():
                     print(f'  logp      min={logp.min().item():.2f} max={logp.max().item():.2f} '
                           f'mean={logp.mean().item():.2f}')
 
-            return total, policy_loss.detach(), val_loss.detach(), bc_loss.detach()
+            return total, policy_loss.detach(), val_loss.detach(), bc_loss.detach(), oob_loss.detach()
 
         min_val_metric = float('inf')
         min_train_metric = float('inf')
@@ -441,10 +584,10 @@ def main():
 
             # ---- Train ----
             policy.train()
-            ep_total = ep_pi = ep_v = ep_bc = 0.0
+            ep_total = ep_pi = ep_v = ep_bc = ep_oob = 0.0
             n_batch = 0
             for batch in train_dl:
-                total, pi_l, v_l, bc_l = compute_batch_loss(batch, in_warmup)
+                total, pi_l, v_l, bc_l, oob_l = compute_batch_loss(batch, in_warmup)
                 optim.zero_grad()
                 total.backward()
                 torch.nn.utils.clip_grad_norm_(params, max_norm=args.max_grad_norm)
@@ -454,12 +597,14 @@ def main():
                 ep_pi += float(pi_l.item())
                 ep_v += float(v_l.item())
                 ep_bc += float(bc_l.item())
+                ep_oob += float(oob_l.item())
                 n_batch += 1
 
             train_avg = ep_total / max(1, n_batch)
             pi_avg = ep_pi / max(1, n_batch)
             v_avg = ep_v / max(1, n_batch)
             bc_avg = ep_bc / max(1, n_batch)
+            oob_avg = ep_oob / max(1, n_batch)
 
             # ---- Validation ----
             val_avg = None
@@ -468,7 +613,7 @@ def main():
                 v_sum, v_n = 0.0, 0
                 with torch.no_grad():
                     for batch in val_dl:
-                        total, _, _, _ = compute_batch_loss(batch, in_warmup)
+                        total, _, _, _, _ = compute_batch_loss(batch, in_warmup)
                         v_sum += float(total.item())
                         v_n += 1
                 val_avg = v_sum / max(1, v_n)
@@ -477,38 +622,49 @@ def main():
                 ls = policy.log_std.detach().cpu().numpy()
             ls_summary = f'log_std[min/mean/max]={ls.min():.3f}/{ls.mean():.3f}/{ls.max():.3f}'
 
+            # Action drift vs original (pretrained) policy, on val set if available else train.
+            diff_loader = val_dl if val_dl is not None else train_dl
+            drift = action_diff_on_loader(diff_loader)
+            if drift is not None:
+                d_mse, d_mae, d_maxabs, d_stdratio = drift
+                drift_summary = (f'drift[mse={d_mse:.4f} mae={d_mae:.4f} '
+                                 f'max={d_maxabs:.3f} std_ratio={d_stdratio:.3f}]')
+            else:
+                drift_summary = ''
+
             tag = '[warmup]' if in_warmup else '[train] '
             if val_avg is not None:
                 print(f'[Offline]{tag} ep={ep}/{epochs} train={train_avg:.6f} val={val_avg:.6f} '
-                      f'pi={pi_avg:.6f} v={v_avg:.6f} bc={bc_avg:.6f} {ls_summary}')
+                      f'pi={pi_avg:.6f} v={v_avg:.6f} bc={bc_avg:.6f} oob={oob_avg:.6f} {ls_summary} {drift_summary}')
             else:
                 print(f'[Offline]{tag} ep={ep}/{epochs} train={train_avg:.6f} '
-                      f'pi={pi_avg:.6f} v={v_avg:.6f} bc={bc_avg:.6f} {ls_summary}')
+                      f'pi={pi_avg:.6f} v={v_avg:.6f} bc={bc_avg:.6f} oob={oob_avg:.6f} {ls_summary} {drift_summary}')
 
-            # ---- Best checkpoint selection (prefer val; fallback to train) ----
-            # During warmup the "loss" is just value loss, so use separate tracking so a strong
-            # value warmup doesn't overwrite a later best-joint checkpoint trivially.
-            sel_metric = val_avg if val_avg is not None else train_avg
-            if val_avg is not None:
-                improved = sel_metric < min_val_metric
-                if improved:
-                    min_val_metric = sel_metric
-            else:
-                improved = sel_metric < min_train_metric
-                if improved:
-                    min_train_metric = sel_metric
+            # ---- Best checkpoint selection (joint-training epochs only) ----
+            # Skip during warmup: warmup loss is pure value loss, not comparable to the joint
+            # loss and not what we ultimately want to select on.
+            if not in_warmup:
+                sel_metric = val_avg if val_avg is not None else train_avg
+                if val_avg is not None:
+                    improved = sel_metric < min_val_metric
+                    if improved:
+                        min_val_metric = sel_metric
+                else:
+                    improved = sel_metric < min_train_metric
+                    if improved:
+                        min_train_metric = sel_metric
 
-            if improved:
-                save_to = os.path.join(args.out, 'best.policy.pt')
-                safe_model_save(model, save_to, verbose=0, optimizer=optim)
-                src = 'val' if val_avg is not None else 'train'
-                print(f'[Offline] new best @ ep {ep} ({src}={sel_metric:.6f})')
-                patience = 0
-            else:
-                patience += 1
-                if args.early_stop_patience > 0 and patience >= args.early_stop_patience:
-                    print(f'[Offline] early stop at ep {ep} (no improvement for {patience} epochs)')
-                    break
+                if improved:
+                    save_to = os.path.join(args.out, 'best.policy.pt')
+                    safe_model_save(model, save_to, verbose=0, optimizer=optim)
+                    src = 'val' if val_avg is not None else 'train'
+                    print(f'[Offline] new best @ ep {ep} ({src}={sel_metric:.6f})')
+                    patience = 0
+                else:
+                    patience += 1
+                    if args.early_stop_patience > 0 and patience >= args.early_stop_patience:
+                        print(f'[Offline] early stop at ep {ep} (no improvement for {patience} epochs)')
+                        break
 
             # Per-epoch checkpoint (kept on user request)
             try:
