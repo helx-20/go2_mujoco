@@ -60,7 +60,7 @@ def main():
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
     parser.add_argument('--initial', default='training/models/actor_init.zip')
-    # parser.add_argument('--initial', default='training/models/run_offline_new2_round2/best.policy.pt')
+    # parser.add_argument('--initial', default='training/models/run_offline_round1/best.policy.pt')
     parser.add_argument('--log_std', type=float, default=-1.0,
                         help='Initial log_std for policy distribution (per-dim, trainable). '
                              '-1 (std ~= 0.37) matches the collection-time setting and keeps the '
@@ -68,7 +68,7 @@ def main():
                              'Extreme logp on outlier data points is bounded by max_grad_norm clipping.')
     parser.add_argument('--log_std_min', type=float, default=-4.0, help='Lower clamp on trainable log_std during loss computation.')
     parser.add_argument('--log_std_max', type=float, default=1.0, help='Upper clamp on trainable log_std during loss computation.')
-    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round1', '/mnt/mnt1/linxuan/go2_data/data/training/round1_append'], help='Path to offline dataset directory')
+    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round1', '/mnt/mnt1/linxuan/go2_data/data/training/round1_append', '/mnt/mnt1/linxuan/go2_data/data/training/round1_append2'], help='Path to offline dataset directory')
     parser.add_argument('--offline_epochs', type=int, default=50, help='Epochs for offline training')
     parser.add_argument('--offline_batch_size', type=int, default=2048)
     parser.add_argument('--offline_lr', type=float, default=1e-4)
@@ -123,6 +123,14 @@ def main():
     parser.add_argument('--oob_bound', type=float, default=5.0,
                         help='Action magnitude above which the OOB penalty engages. Dataset actions are within '
                              '[-5, 5], so 5 is the natural choice.')
+    parser.add_argument('--crash_coef', type=float, default=1.0,
+                        help='Weight for action-space hinge repulsion on crash samples. '
+                             'Loss = relu(crash_margin - ||pred_act - crash_act||^2), bounded and zero once '
+                             'policy is far enough from crash actions. Only active when filter_bc=True.')
+    parser.add_argument('--crash_margin', type=float, default=4.0,
+                        help='L2-squared margin for crash repulsion hinge. Policy stops being penalized once '
+                             '||pred_act - crash_act||^2 >= crash_margin. With 12-dim actions ~N(0,1.87^2), '
+                             'margin=4 corresponds to mean per-dim offset of ~0.58 (about 0.3 std).')
     # filter-BC baseline: skip AWAC entirely, BC only on samples with return above threshold.
     # Motivation: with sparse binary rewards (return in {-1, 0}) and small data, AWAC's
     # advantage-weighted logp has low SNR. Filter-BC reduces the signal to "imitate only
@@ -518,8 +526,22 @@ def main():
                 policy_loss = -(w_keep * logp).sum() / denom
                 bc_loss = (w_keep * bc_per_sample).sum() / denom
 
+                # Hinge repulsion on crash samples: push policy mean away from crash actions in
+                # action space. relu(margin - dist^2) is zero once the policy is far enough,
+                # preventing the unbounded divergence that logp-based repulsion causes.
+                if args.crash_coef > 0:
+                    crash_mask = 1.0 - keep
+                    dist_sq = ((pred_act - b_act) ** 2).sum(dim=1)
+                    crash_repel = F.relu(args.crash_margin - dist_sq)
+                    w_crash = (loss_w * crash_mask).clamp(max=args.combined_weight_max)
+                    crash_denom = w_crash.sum().clamp(min=1.0)
+                    crash_loss = (w_crash * crash_repel).sum() / crash_denom
+                else:
+                    crash_loss = torch.zeros((), device=pred_act.device)
+
                 combined_w = w_keep
             else:
+                crash_loss = torch.zeros((), device=pred_act.device)
                 # Per-batch normalized advantage for stable AWAC weights
                 adv = b_ret - pred_val.detach()
                 adv = (adv - adv.mean()) / (adv.std() + 1e-8)
@@ -551,7 +573,8 @@ def main():
                 total = (policy_loss
                          + value_coef * val_loss
                          + args.bc_coef * bc_loss
-                         + args.oob_coef * oob_loss)
+                         + args.oob_coef * oob_loss
+                         + args.crash_coef * crash_loss)
 
             # One-shot diagnostic on the very first batch
             if args.debug_first_batch and not _debug_state['printed']:
@@ -573,7 +596,7 @@ def main():
                     print(f'  logp      min={logp.min().item():.2f} max={logp.max().item():.2f} '
                           f'mean={logp.mean().item():.2f}')
 
-            return total, policy_loss.detach(), val_loss.detach(), bc_loss.detach(), oob_loss.detach()
+            return total, policy_loss.detach(), val_loss.detach(), bc_loss.detach(), oob_loss.detach(), crash_loss.detach()
 
         min_val_metric = float('inf')
         min_train_metric = float('inf')
@@ -584,10 +607,10 @@ def main():
 
             # ---- Train ----
             policy.train()
-            ep_total = ep_pi = ep_v = ep_bc = ep_oob = 0.0
+            ep_total = ep_pi = ep_v = ep_bc = ep_oob = ep_crash = 0.0
             n_batch = 0
             for batch in train_dl:
-                total, pi_l, v_l, bc_l, oob_l = compute_batch_loss(batch, in_warmup)
+                total, pi_l, v_l, bc_l, oob_l, crash_l = compute_batch_loss(batch, in_warmup)
                 optim.zero_grad()
                 total.backward()
                 torch.nn.utils.clip_grad_norm_(params, max_norm=args.max_grad_norm)
@@ -598,6 +621,7 @@ def main():
                 ep_v += float(v_l.item())
                 ep_bc += float(bc_l.item())
                 ep_oob += float(oob_l.item())
+                ep_crash += float(crash_l.item())
                 n_batch += 1
 
             train_avg = ep_total / max(1, n_batch)
@@ -605,6 +629,7 @@ def main():
             v_avg = ep_v / max(1, n_batch)
             bc_avg = ep_bc / max(1, n_batch)
             oob_avg = ep_oob / max(1, n_batch)
+            crash_avg = ep_crash / max(1, n_batch)
 
             # ---- Validation ----
             val_avg = None
@@ -613,7 +638,7 @@ def main():
                 v_sum, v_n = 0.0, 0
                 with torch.no_grad():
                     for batch in val_dl:
-                        total, _, _, _, _ = compute_batch_loss(batch, in_warmup)
+                        total, _, _, _, _, _ = compute_batch_loss(batch, in_warmup)
                         v_sum += float(total.item())
                         v_n += 1
                 val_avg = v_sum / max(1, v_n)
@@ -635,10 +660,10 @@ def main():
             tag = '[warmup]' if in_warmup else '[train] '
             if val_avg is not None:
                 print(f'[Offline]{tag} ep={ep}/{epochs} train={train_avg:.6f} val={val_avg:.6f} '
-                      f'pi={pi_avg:.6f} v={v_avg:.6f} bc={bc_avg:.6f} oob={oob_avg:.6f} {ls_summary} {drift_summary}')
+                      f'pi={pi_avg:.6f} v={v_avg:.6f} bc={bc_avg:.6f} oob={oob_avg:.6f} crash={crash_avg:.6f} {ls_summary} {drift_summary}')
             else:
                 print(f'[Offline]{tag} ep={ep}/{epochs} train={train_avg:.6f} '
-                      f'pi={pi_avg:.6f} v={v_avg:.6f} bc={bc_avg:.6f} oob={oob_avg:.6f} {ls_summary} {drift_summary}')
+                      f'pi={pi_avg:.6f} v={v_avg:.6f} bc={bc_avg:.6f} oob={oob_avg:.6f} crash={crash_avg:.6f} {ls_summary} {drift_summary}')
 
             # ---- Best checkpoint selection (joint-training epochs only) ----
             # Skip during warmup: warmup loss is pure value loss, not comparable to the joint
