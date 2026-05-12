@@ -265,7 +265,7 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # parser.add_argument('--controller_path', type=str, default='training/models/actor_init.zip', help='Path to SB3 .zip or .pt file containing the trained policy')
-    parser.add_argument('--controller_path', type=str, default='training/models/run_offline_round1/best.policy.pt')
+    parser.add_argument('--controller_path', type=str, default='training/models/run_offline_round4/best.policy.pt')
     parser.add_argument('--critical_threshold', type=float, default=0.8, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--worker_id', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=100)
@@ -276,7 +276,7 @@ if __name__ == '__main__':
     parser.add_argument('--training_out', type=str, default=None, help='Optional path to save criticality dataset (obs, actions, labels)')
     parser.add_argument('--save_crash_only', action='store_true', help='Only save episodes that ended in crash to training_out dataset')
     parser.add_argument('--nade', action='store_true')
-    parser.add_argument('--initial_log_std', type=float, default=-1.0, help='Optional initial log std for safe_policy (overridden by loaded model if present)')
+    parser.add_argument('--initial_log_std', type=float, default=None, help='Optional initial log std for safe_policy (overridden by loaded model if present)')
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
     if args.training_out:

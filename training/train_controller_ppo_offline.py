@@ -53,29 +53,29 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--rl_device', type=str, default='cuda:2')
     parser.add_argument('--max_steps', type=int, default=30)
-    parser.add_argument('--n_eval_episodes', type=int, default=5, help='Number of episodes per evaluation')
+    parser.add_argument('--n_eval_episodes', type=int, default=1, help='Number of episodes per evaluation')
     parser.add_argument('--out', type=str, default='training/models/')
-    parser.add_argument('--run_name', type=str, default='run_offline_round1', help='Subdirectory name for this training run')
+    parser.add_argument('--run_name', type=str, default='run_offline_round4', help='Subdirectory name for this training run')
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
-    parser.add_argument('--initial', default='training/models/actor_init.zip')
-    # parser.add_argument('--initial', default='training/models/run_offline_round1/best.policy.pt')
-    parser.add_argument('--log_std', type=float, default=-1.0,
+    # parser.add_argument('--initial', default='training/models/actor_init.zip')
+    parser.add_argument('--initial', default='training/models/run_offline_round3/best.policy.pt')
+    parser.add_argument('--log_std', type=float, default=None,
                         help='Initial log_std for policy distribution (per-dim, trainable). '
                              '-1 (std ~= 0.37) matches the collection-time setting and keeps the '
                              'policy sharp enough for AWAC gradient on the mean to be strong. '
                              'Extreme logp on outlier data points is bounded by max_grad_norm clipping.')
     parser.add_argument('--log_std_min', type=float, default=-4.0, help='Lower clamp on trainable log_std during loss computation.')
     parser.add_argument('--log_std_max', type=float, default=1.0, help='Upper clamp on trainable log_std during loss computation.')
-    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round1', '/mnt/mnt1/linxuan/go2_data/data/training/round1_append', '/mnt/mnt1/linxuan/go2_data/data/training/round1_append2'], help='Path to offline dataset directory')
+    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round4'], help='Path to offline dataset directory')
     parser.add_argument('--offline_epochs', type=int, default=50, help='Epochs for offline training')
     parser.add_argument('--offline_batch_size', type=int, default=2048)
     parser.add_argument('--offline_lr', type=float, default=1e-4)
     parser.add_argument('--train_value_net_only', action='store_true', help='Only train value net during offline training (policy net weights will be frozen)')
     parser.add_argument('--use_initial_optimizer', action='store_true', help='Whether to load optimizer state from initial .pt file if available (ignored if initial is SB3 .zip)')
     # AWAC/AWR + stability
-    parser.add_argument('--awac_beta', type=float, default=1.0,
+    parser.add_argument('--awac_beta', type=float, default=0.3,
                         help='AWAC/AWR temperature. Smaller -> sharper exploitation of high-adv samples; larger -> more uniform. '
                              'beta=1 keeps meaningful discrimination between good/bad samples; '
                              'combined_weight_max already caps outliers, so no need to soften further.')
@@ -83,13 +83,13 @@ def main():
                         help='Upper clip for exp(adv/beta) to prevent exploding weights.')
     parser.add_argument('--max_grad_norm', type=float, default=1.0,
                         help='Max grad norm for clipping.')
-    parser.add_argument('--bc_coef', type=float, default=0.5,
+    parser.add_argument('--bc_coef', type=float, default=0.1,
                         help='Behavior-cloning regularizer weight (KL-to-behavior proxy under fixed log_std). Set 0 to disable.')
     parser.add_argument('--value_coef', type=float, default=50.0,
                         help='Weight for value regression loss during joint training. '
                              'Needs to be large because policy_loss is O(10) while value_loss is O(0.04).')
     # Value warmup / validation / early stopping
-    parser.add_argument('--value_warmup_epochs', type=int, default=10,
+    parser.add_argument('--value_warmup_epochs', type=int, default=5,
                         help='Train value net only for the first N epochs, then jointly train policy+value. Ignored if --train_value_net_only.')
     parser.add_argument('--val_split', type=float, default=0.1,
                         help='Fraction of offline dataset held out for validation. 0 disables validation.')
@@ -116,14 +116,14 @@ def main():
     parser.add_argument('--filter_awac', default=True,
                         help='In filter-BC mode, additionally weight kept samples by exp(adv/beta). This reuses '
                              'the value function to prioritize the best non-crash samples without imitating crashes.')
-    parser.add_argument('--oob_coef', type=float, default=1,
+    parser.add_argument('--oob_coef', type=float, default=0.5,
                         help='Coefficient on the out-of-bounds soft penalty on pred_act. Zero-gradient inside '
                              '[-oob_bound, +oob_bound], quadratic outside. Keeps MLP extrapolation in check on '
                              'OOD states without hard-clipping gradients inside the data range. Set 0 to disable.')
     parser.add_argument('--oob_bound', type=float, default=5.0,
                         help='Action magnitude above which the OOB penalty engages. Dataset actions are within '
                              '[-5, 5], so 5 is the natural choice.')
-    parser.add_argument('--crash_coef', type=float, default=1.0,
+    parser.add_argument('--crash_coef', type=float, default=0.5,
                         help='Weight for action-space hinge repulsion on crash samples. '
                              'Loss = relu(crash_margin - ||pred_act - crash_act||^2), bounded and zero once '
                              'policy is far enough from crash actions. Only active when filter_bc=True.')
@@ -139,7 +139,7 @@ def main():
                         help='Replace AWAC policy loss with filter-BC: BC only on samples with b_ret > --filter_return_threshold. '
                              'Value net still trains normally so it is available for downstream PPO. '
                              'Default True; pass --no-filter_bc to fall back to AWAC.')
-    parser.add_argument('--filter_return_threshold', type=float, default=-0.5,
+    parser.add_argument('--filter_return_threshold', type=float, default=-0.1,
                         help='Keep samples with b_ret > this threshold for filter-BC. '
                              'With returns in {-1, 0}, default -0.5 keeps all non-crash samples and drops crashes.')
     parser.add_argument('--debug_first_batch', action='store_true', default=True,
@@ -533,7 +533,8 @@ def main():
                     crash_mask = 1.0 - keep
                     dist_sq = ((pred_act - b_act) ** 2).sum(dim=1)
                     crash_repel = F.relu(args.crash_margin - dist_sq)
-                    w_crash = (loss_w * crash_mask).clamp(max=args.combined_weight_max)
+                    return_weight = (-b_ret).clamp(0.0, 1.0)  # |return|: 1.0 at crash step, ~0.5 at threshold boundary
+                    w_crash = (loss_w * crash_mask * return_weight).clamp(max=args.combined_weight_max)
                     crash_denom = w_crash.sum().clamp(min=1.0)
                     crash_loss = (w_crash * crash_repel).sum() / crash_denom
                 else:
@@ -699,7 +700,7 @@ def main():
                 print('[Offline] saving failed:', e)
 
 
-    def evaluate_policy(safe_policy, policy=pretrain_wrapper, criticality_model=criticality_model, n_episodes: int = 5):
+    def evaluate_policy(safe_policy, policy=pretrain_wrapper, criticality_model=criticality_model, n_episodes: int = 1):
         config_file_path = "go2_training.yaml"
         terrain_cfg = "terrain_config.yaml"
 
