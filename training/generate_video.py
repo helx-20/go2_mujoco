@@ -8,7 +8,7 @@ This script will try several methods to capture frames from the MuJoCo viewer:
 If neither works the script will print an error and exit.
 
 Usage example:
-  xvfb-run --auto-servernum -s "-screen 0 1200x800x24 -ac -noreset" python training/generate_video.py --viewer
+  xvfb-run --auto-servernum -s "-screen 0 1200x800x24 -ac -noreset" python training/generate_video.py --viewer --duration 8
   (pkill -TERM Xvfb; pkill -TERM -f xvfb-run; sleep 1; pkill -KILL Xvfb; pkill -KILL -f xvfb-run) &>/dev/null || true
 
 Note: run this from the repository root so imports resolve correctly.
