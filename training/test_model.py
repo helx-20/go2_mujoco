@@ -152,6 +152,8 @@ def run(args):
     # global buffers for criticality training data (across episodes)
     training_data_all = {'obs': [], 'actions': [], 'rewards': [], 'dones': [], 'useful': [], 'weights': [], 'log_prob': []}
 
+    replay_data_all = []
+
     use_safe_model_num = 0
 
     for i in range(n):
@@ -160,6 +162,11 @@ def run(args):
         steps = 0
         total_weight = 1.0
         use_safe_model = False
+        replay_data = {'t_action': [], 'obs': []}
+
+        if args.replay_data_path is not None:
+            replay_data = np.load(args.replay_data_path, allow_pickle=True)[args.replay_idx]
+            print(f'Loaded replay data from {args.replay_data_path} (episodes={len(replay_data["t_action"])})')
 
         while not done:
             steps += 1
@@ -186,6 +193,10 @@ def run(args):
                 else:
                     idx = np.random.randint(0, candidates_arr.shape[0])
                     weight = 1.0
+            if len(replay_data['t_action']) > steps-1:
+                idx = replay_data['t_action'][steps-1]
+                weight = 1.0
+                
             total_weight *= weight
             action = candidates_arr[idx]
             action = np.asarray(action, dtype=np.float32)
@@ -193,6 +204,10 @@ def run(args):
             if training_out is not None:
                 while len(env.trainer.training_data['weights']) < len(env.trainer.training_data['obs']):
                     env.trainer.training_data['weights'].append(weight)
+            
+            if args.replay_out:
+                replay_data['t_action'].append(idx)
+                replay_data['obs'].append(obs)
             obs = next_obs
             done = bool(terminated) or bool(truncated) or bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
 
@@ -228,6 +243,8 @@ def run(args):
             training_data_all['useful'].extend(ep_useful)
             training_data_all['weights'].extend(ep_weights)
             training_data_all['log_prob'].extend(ep_log_prob)
+        if args.replay_out:
+            replay_data_all.append(replay_data)
         if (i + 1) % args.log_interval == 0:
             Mean, RHF, Val = calculate_val(crashes)
             print(f"episode {i+1}/{n}  samples={len(crashes)}  Mean={Mean[-1]:.6f}  RHF={RHF[-1]:.6f}")
@@ -242,6 +259,13 @@ def run(args):
                     print(f'Wrote training data to {training_out} (samples={len(training_data_all)})')
                 except Exception as e:
                     print('Failed to save training data:', e)
+
+            if args.replay_out:
+                try:
+                    np.save(os.path.join(args.replay_out, f'replay_{args.worker_id}.npy'), np.array(replay_data_all))
+                    print(f'Wrote replay data to {args.replay_out} (episodes={len(replay_data_all)})')
+                except Exception as e:
+                    print('Failed to save replay data:', e)
 
     # final stats
     Mean, RHF, Val = calculate_val(crashes)
@@ -260,11 +284,18 @@ def run(args):
         except Exception as e:
             print('Failed to save training data:', e)
 
+    # final save replay data
+    if args.replay_out:
+        try:
+            np.save(os.path.join(args.replay_out, f'replay_{args.worker_id}.npy'), np.array(replay_data_all))
+            print(f'Wrote replay data to {args.replay_out} (episodes={len(replay_data_all)})')
+        except Exception as e:
+            print('Failed to save replay data:', e)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    # parser.add_argument('--controller_path', type=str, default='training/models/actor_init.zip', help='Path to SB3 .zip or .pt file containing the trained policy')
-    parser.add_argument('--controller_path', type=str, default='training/models/run_offline_round5/best.policy.pt')
+    parser.add_argument('--controller_path', type=str, default='training/models/actor_init.zip', help='Path to SB3 .zip or .pt file containing the trained policy')
+    #parser.add_argument('--controller_path', type=str, default='training/models/run_offline_round5/best.policy.pt')
     parser.add_argument('--critical_threshold', type=float, default=0.5, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--worker_id', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=100)
@@ -276,8 +307,13 @@ if __name__ == '__main__':
     parser.add_argument('--save_crash_only', action='store_true', help='Only save episodes that ended in crash to training_out dataset')
     parser.add_argument('--nade', action='store_true')
     parser.add_argument('--initial_log_std', type=float, default=None, help='Optional initial log std for safe_policy (overridden by loaded model if present)')
+    parser.add_argument('--replay_out', type=str, default=None, help='Optional path to save replay data of episodes (for debugging)')
+    parser.add_argument('--replay_data_path', type=str, default=None)
+    parser.add_argument('--replay_idx', type=int, default=0)
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
+    if args.replay_out:
+        os.makedirs(args.replay_out, exist_ok=True)
     if args.training_out:
         os.makedirs(args.training_out, exist_ok=True)
         args.out = None

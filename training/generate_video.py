@@ -27,14 +27,41 @@ import shutil
 import os
 
 import mujoco
+import torch
 
-
-def capture_frame(renderer, data, cam, scene_option=None):
+def capture_frame(renderer, data, cam, scene_option=None, ground_color=None):
     """Render an offscreen RGB frame using mujoco.Renderer. Returns HxWx3 uint8."""
     if scene_option is not None:
         renderer.update_scene(data, camera=cam, scene_option=scene_option)
     else:
         renderer.update_scene(data, camera=cam)
+
+    # disable wireframe overlay (grid lines) and let caller override ground color
+    try:
+        # Turn off wireframe render flag so mesh/grid lines aren't shown
+        renderer.scene.flags[mujoco.mjtRndFlag.mjRND_WIREFRAME] = False
+    except Exception:
+        pass
+
+    # optionally paint the ground (hfield/plane) with a solid color
+    if ground_color is not None:
+        try:
+            # iterate visible geoms and override ground color
+            for i in range(getattr(renderer.scene, 'ngeom', 0)):
+                g = renderer.scene.geoms[i]
+                if int(getattr(g, 'type', -1)) in (mujoco.mjtGeom.mjGEOM_HFIELD, mujoco.mjtGeom.mjGEOM_PLANE):
+                    try:
+                        g.rgba[0] = float(ground_color[0])
+                        g.rgba[1] = float(ground_color[1])
+                        g.rgba[2] = float(ground_color[2])
+                        g.rgba[3] = 1.0
+                        # remove textured material if present
+                        g.matid = -1
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     return renderer.render()
 
 
@@ -195,7 +222,7 @@ def main(args):
     action_net.eval()
     safe_policy = PolicyOnlyWrapper(policy_net, action_net).cpu()
 
-    trainer = TestEnv(policy=pretrain_wrapper, safe_policy=safe_policy, config_file_path=config_file_path, terrain_config_file=terrain_cfg, criticality_model=criticality_model, critical_threshold=0.5, collect_training_data=False, render=True)
+    trainer = TestEnv(policy=pretrain_wrapper, safe_policy=safe_policy, config_file_path=config_file_path, terrain_config_file=terrain_cfg, criticality_model=criticality_model, critical_threshold=args.critical_threshold, collect_training_data=False, render=True)
     env = TerrainGymEnv(trainer, max_episode_steps=args.max_steps)
 
     width = args.width
@@ -229,6 +256,16 @@ def main(args):
     if frames_dir:
         os.makedirs(frames_dir, exist_ok=True)
 
+    # parse ground color argument (r,g,b in 0..1)
+    ground_color = None
+    if hasattr(args, 'ground_color') and args.ground_color:
+        try:
+            parts = [p for p in args.ground_color.split(',') if p != '']
+            if len(parts) == 3:
+                ground_color = (float(parts[0]), float(parts[1]), float(parts[2]))
+        except Exception:
+            ground_color = None
+
     def on_terrain_update():
         try:
             renderer._gl_context.make_current()
@@ -242,7 +279,7 @@ def main(args):
             return
         try:
             sync_camera(capture_cam, trainer.viewer.cam)
-            rgb = capture_frame(renderer, trainer.data, capture_cam, scene_option=trainer.viewer.opt)
+            rgb = capture_frame(renderer, trainer.data, capture_cam, scene_option=trainer.viewer.opt, ground_color=ground_color)
             fname = os.path.join(frames_dir, f'frame_{frame_idx:06d}.png')
             imageio.imwrite(fname, rgb)
             frame_idx += 1
@@ -252,22 +289,72 @@ def main(args):
     trainer.on_terrain_update = on_terrain_update
     trainer.frame_callback = frame_callback
 
+    action_space = env.action_space
+    # prepare discretization edges for actions: 10 bins per dimension
+    low = np.asarray(action_space.low, dtype=np.float32)
+    high = np.asarray(action_space.high, dtype=np.float32)
+    action_edges = [np.linspace(low[d], high[d], num=11) for d in range(low.shape[0])]
+    D = 4
+    grids = np.meshgrid(*[np.arange(10) for _ in range(D)], indexing='ij')
+    bins_flat = np.stack([g.reshape(-1) for g in grids], axis=1).astype(np.int64)
+    num_actions = bins_flat.shape[0]
+    centers = np.zeros((num_actions, D), dtype=np.float32)
+    for d in range(D):
+        e = action_edges[d]
+        b_idx = bins_flat[:, d]
+        centers[:, d] = 0.5 * (e[b_idx] + e[b_idx + 1])
+    candidates_arr = centers
+
     try:
         for ep in range(1):
             obs, _ = env.reset()
             done = False
             step = 0
+            total_weight = 1.0
+            if args.replay_data_path is not None:
+                try:
+                    replay_data = np.load(args.replay_data_path, allow_pickle=True)[args.replay_idx]['t_action']
+                    print(f'Loaded replay data from {args.replay_data_path} (episodes={len(replay_data)})')
+                except Exception as e:
+                    print('Failed to load replay data:', e)
+                    replay_data = []
             while not done and step < args.steps:
-                if action_space.shape[0] > 0:
-                    a = action_space.sample()
-                    action = np.asarray(a, dtype=np.float32)
-                else:
-                    action = np.array([], dtype=np.float32)
+                with torch.no_grad():
+                    t_obs = torch.from_numpy(obs.astype(np.float32)).unsqueeze(0).repeat(candidates_arr.shape[0], 1)
+                    t_act = torch.from_numpy(np.asarray(candidates_arr, dtype=np.float32))
+                    t_in = torch.cat([t_obs, t_act], dim=1)
+                    t_out = criticality_model(t_in)
+                    criticality = torch.nn.functional.softmax(t_out, dim=1)[:, 1].squeeze().cpu().numpy()
 
-                _, _, terminated, truncated, _ = env.step(action)
-                done = bool(terminated) or bool(truncated)
+                if len(replay_data) > step:
+                    idx = replay_data[step]
+                    weight = 1.0
+                else:
+                    if not args.nade:
+                        idx = np.random.randint(0, candidates_arr.shape[0])
+                        weight = 1.0
+                    else:
+                        if np.max(criticality) > 3e-1 and total_weight > 1e-4:
+                            q_list = 0.99 * (criticality / np.sum(criticality)) + 0.01 * np.ones_like(criticality) / len(criticality)
+                            q_list = q_list / np.sum(q_list)
+                            idx = np.random.choice(np.arange(candidates_arr.shape[0]), p=q_list)
+                            # idx = int(np.argmax(criticality))
+                            # weight = float((1 / len(criticality)) / (criticality[idx] / np.sum(criticality)))
+                            weight = float((1 / len(criticality)) / q_list[idx])
+                        else:
+                            idx = np.random.randint(0, candidates_arr.shape[0])
+                            weight = 1.0
+
+                total_weight *= weight
+                action = candidates_arr[idx]
+                action = np.asarray(action, dtype=np.float32)
+                next_obs, reward, terminated, truncated, info = env.step(action)
+                obs = next_obs
+                done = bool(terminated) or bool(truncated) or bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False))
 
                 step += 1
+                crash = int(bool(info.get('fallen', False) or info.get('collided', False) or info.get('base_collision', False) or info.get('thigh_collision', False) or info.get('stuck', False)))
+                print(step, done, crash)
                 if args.delay > 0:
                     time.sleep(args.delay)
 
@@ -280,7 +367,7 @@ def main(args):
         os.makedirs(out_dir, exist_ok=True)
 
     if frames_dir and frame_idx > 0:
-        compose_fps = max(1, int(round(frame_idx / max(args.duration, 1e-3))))
+        compose_fps = 50 # max(1, int(round(frame_idx / max(args.duration, 1e-3))))
         ffmpeg_exe = shutil.which('ffmpeg')
         if ffmpeg_exe is None:
             try:
@@ -309,8 +396,10 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--controller_path', type=str, default='training/models/run_offline_round5/best.policy.pt')
-    parser.add_argument('--out', default='training/videos/rollout.mp4', help='output mp4 path')
+    parser.add_argument('--controller_path', type=str, default='training/models/actor_init.zip')
+    # parser.add_argument('--controller_path', type=str, default='training/models/run_offline_round5/best.policy.pt')
+    parser.add_argument('--critical_threshold', type=float, default=0.5, help='Criticality threshold (default: 0.5)')
+    parser.add_argument('--out', default='training/videos', help='output mp4 path')
     parser.add_argument('--steps', type=int, default=800, help='max frames to record')
     parser.add_argument('--max_steps', type=int, default=1000, help='env max steps per episode')
     parser.add_argument('--fps', type=int, default=60, help='unused for compose; kept for compatibility')
@@ -319,10 +408,23 @@ if __name__ == '__main__':
     parser.add_argument('--width', type=int, default=1200, help='frame width for offscreen render')
     parser.add_argument('--height', type=int, default=800, help='frame height for offscreen render')
     parser.add_argument('--viewer', action='store_true', help='force using MuJoCo viewer for capture (use under xvfb-run)')
-    parser.add_argument('--frames-dir', type=str, default="training/videos/frames", help='directory to save per-frame PNGs and compose with ffmpeg after run')
-    parser.add_argument('--grab-x', type=int, default=0, help='x offset for X11 grab (use to skip left toolbar)')
-    parser.add_argument('--grab-y', type=int, default=0, help='y offset for X11 grab')
-    parser.add_argument('--grab-width', type=int, default=None, help='width for X11 grab (defaults to --width)')
-    parser.add_argument('--grab-height', type=int, default=None, help='height for X11 grab (defaults to --height)')
+    parser.add_argument('--frames-dir', type=str, default=None, help='directory to save per-frame PNGs and compose with ffmpeg after run')
+    parser.add_argument('--ground-color', type=str, default="0.8,0.8,0.8", help='ground color as "r,g,b" in 0..1 to paint hfield/plane geoms')
+    parser.add_argument('--nade', action='store_true')
+    parser.add_argument('--worker_id', type=int, default=0)
+    parser.add_argument('--replay_data_path', type=str, default=None)
+    parser.add_argument('--replay_idx', type=int, default=0)
     args = parser.parse_args()
+    if args.controller_path.endswith('.pt'):
+        args.out = os.path.join(args.out, args.controller_path.split('/')[-2], f'video_{args.worker_id}.mp4')
+    elif args.controller_path.endswith('.zip'):
+        args.out = os.path.join(args.out, args.controller_path.split('/')[-1][:-4], f'video_{args.worker_id}.mp4')
+    args.frames_dir = os.path.join(os.path.dirname(args.out), f'frames_{args.worker_id}')
+    print('Output video will be:', args.out)
+    print('Frames will be saved to:', args.frames_dir)
+    np.random.seed(args.worker_id)
+    torch.manual_seed(args.worker_id)                  
+    torch.cuda.manual_seed(args.worker_id)             
+    torch.cuda.manual_seed_all(args.worker_id)          
+    torch.backends.cudnn.deterministic = True
     main(args)
