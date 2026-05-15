@@ -149,6 +149,12 @@ class TestEnv:
         self.step_counter = 0
         self.robot_counter = 0
 
+        # Optional capture hooks (set externally by generate_video.py).
+        # frame_callback() fires once per robot control step inside step().
+        # on_terrain_update() fires after hfield_data has been refreshed.
+        self.frame_callback = None
+        self.on_terrain_update = None
+
         self.init_skip_time = self.go2_config["init_skip_time"]
         self.init_skip_frame = 10
 
@@ -197,6 +203,8 @@ class TestEnv:
         if self.render:
             self.viewer.update_hfield(self.terrain_changer.hfield_id)
             self.viewer.sync()
+        if self.on_terrain_update is not None:
+            self.on_terrain_update()
 
         self.step_counter = 0
         self.robot_counter = 0
@@ -292,6 +300,8 @@ class TestEnv:
         if self.render:
             self.viewer.update_hfield(self.terrain_changer.hfield_id)
             self.viewer.sync()
+        if self.on_terrain_update is not None:
+            self.on_terrain_update()
 
         total_sim_steps = int(self.terrain_decimation * self.control_decimation)
 
@@ -373,6 +383,10 @@ class TestEnv:
                 if self.lock_camera:
                     self.viewer.cam.lookat[:] = self.data.qpos[:3]
                 self.viewer.sync()
+
+            # one frame per robot control step
+            if (sim_i + 1) % int(self.control_decimation) == 0 and self.frame_callback is not None:
+                self.frame_callback()
 
             if self.realtime_sim:  # 只能确保仿真不比真实世界快，但是可能会比真实世界慢，取决于计算开销
                 time_until_next_step = self.model.opt.timestep - (time.time() - step_start)

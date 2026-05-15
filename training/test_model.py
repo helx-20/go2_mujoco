@@ -78,7 +78,7 @@ def run(args):
         dummy_env = make_env_fn(trainer, max_episode_steps=1000)()  # create a dummy env to infer action space
         sb3 = PPO('MlpPolicy', dummy_env, policy_kwargs=policy_kwargs, device='cpu')
         # Load state dict from .pt file
-        state_dict = torch.load(controller_path, map_location='cpu')
+        state_dict = torch.load(controller_path, map_location='cpu', weights_only=False)
         state_dict = state_dict['policy_state_dict']
         sb3.policy.load_state_dict(state_dict)
 
@@ -105,7 +105,7 @@ def run(args):
 
     from criticality.utils.criticality_model import SimpleClassifier
     criticality_model = SimpleClassifier(input_dim=56)
-    criticality_model.load_state_dict(torch.load('criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', map_location='cpu'))
+    criticality_model.load_state_dict(torch.load('criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', map_location='cpu', weights_only=False))
     criticality_model.to('cpu').eval()
 
     from stable_baselines3 import PPO as SB3PPO
@@ -122,7 +122,6 @@ def run(args):
                     safe_policy.log_std.fill_(args.initial_log_std)
             except:
                 pass
-
     else:
         collect_training_data = False
         safe_policy = safe_wrapper
@@ -265,8 +264,8 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # parser.add_argument('--controller_path', type=str, default='training/models/actor_init.zip', help='Path to SB3 .zip or .pt file containing the trained policy')
-    parser.add_argument('--controller_path', type=str, default='training/models/run_offline_round4/best.policy.pt')
-    parser.add_argument('--critical_threshold', type=float, default=0.8, help='Criticality threshold (default: 0.5)')
+    parser.add_argument('--controller_path', type=str, default='training/models/run_offline_round5/best.policy.pt')
+    parser.add_argument('--critical_threshold', type=float, default=0.5, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--worker_id', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=100)
     parser.add_argument('--max_steps', type=int, default=40)
