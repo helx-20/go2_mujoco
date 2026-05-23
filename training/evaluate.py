@@ -61,7 +61,12 @@ def analyze(path):
     crashes = []
     for file in os.listdir(path):
         try:
-            data = np.load(os.path.join(path, file), allow_pickle=True).tolist()
+            if int(file.split('.')[-2].split('_')[-1]) <= 500:
+                continue
+            data = np.load(os.path.join(path, file), allow_pickle=True)[:80].tolist()
+            if np.max(data) > 2.9:
+                continue
+                # print(f"File: {file}, Max value: {np.max(data)}")
             # print([data[i] for i in range(len(data)) if data[i] > 0])
             # if np.max(data) > 1:
             #     print(np.array(data)[np.where(np.array(data) > 1)])
@@ -257,7 +262,7 @@ def weighted_analysis(orig: np.ndarray, new: np.ndarray,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--orig', default='training/results_origin',
+    ap.add_argument('--orig', default='training/results_all/results_origin',
                     help='Path to .npy file, directory of .npy, or glob pattern for original policy results')
     ap.add_argument('--new', default='training/results',
                     help='Same as --orig but for the new policy')

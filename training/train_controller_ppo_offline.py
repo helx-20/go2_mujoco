@@ -55,12 +55,12 @@ def main():
     parser.add_argument('--max_steps', type=int, default=30)
     parser.add_argument('--n_eval_episodes', type=int, default=1, help='Number of episodes per evaluation')
     parser.add_argument('--out', type=str, default='training/models/')
-    parser.add_argument('--run_name', type=str, default='run_offline_round6_2', help='Subdirectory name for this training run')
+    parser.add_argument('--run_name', type=str, default='run_offline_round8', help='Subdirectory name for this training run')
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
     # parser.add_argument('--initial', default='training/models/actor_init.zip')
-    parser.add_argument('--initial', default='training/models/run_offline_round5/best.policy.pt')
+    parser.add_argument('--initial', default='training/models/run_offline_round7/best.policy.pt')
     parser.add_argument('--log_std', type=float, default=None,
                         help='Initial log_std for policy distribution (per-dim, trainable). '
                              '-1 (std ~= 0.37) matches the collection-time setting and keeps the '
@@ -68,32 +68,32 @@ def main():
                              'Extreme logp on outlier data points is bounded by max_grad_norm clipping.')
     parser.add_argument('--log_std_min', type=float, default=-4.0, help='Lower clamp on trainable log_std during loss computation.')
     parser.add_argument('--log_std_max', type=float, default=1.0, help='Upper clamp on trainable log_std during loss computation.')
-    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round4', '/mnt/mnt1/linxuan/go2_data/data/training/round5', '/mnt/mnt1/linxuan/go2_data/data/training/round6'], help='Path to offline dataset directory')
+    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round7', '/mnt/mnt1/linxuan/go2_data/data/training/round7_append', '/mnt/mnt1/linxuan/go2_data/data/training/round7', '/mnt/mnt1/linxuan/go2_data/data/training/round7_thr05', '/mnt/mnt1/linxuan/go2_data/data/training/round8', '/mnt/mnt1/linxuan/go2_data/data/training/round8_append'], help='Path to offline dataset directory')
     parser.add_argument('--offline_epochs', type=int, default=30, help='Epochs for offline training')
-    parser.add_argument('--offline_batch_size', type=int, default=4096)
+    parser.add_argument('--offline_batch_size', type=int, default=2048)
     parser.add_argument('--offline_lr', type=float, default=1e-4)
     parser.add_argument('--train_value_net_only', action='store_true', help='Only train value net during offline training (policy net weights will be frozen)')
     parser.add_argument('--use_initial_optimizer', action='store_true', help='Whether to load optimizer state from initial .pt file if available (ignored if initial is SB3 .zip)')
     # AWAC/AWR + stability
-    parser.add_argument('--awac_beta', type=float, default=0.1,
+    parser.add_argument('--awac_beta', type=float, default=0.5,
                         help='AWAC/AWR temperature. Smaller -> sharper exploitation of high-adv samples; larger -> more uniform. '
                              'beta=1 keeps meaningful discrimination between good/bad samples; '
                              'combined_weight_max already caps outliers, so no need to soften further.')
-    parser.add_argument('--awac_weight_max', type=float, default=40.0,
+    parser.add_argument('--awac_weight_max', type=float, default=20.0,
                         help='Upper clip for exp(adv/beta) to prevent exploding weights.')
     parser.add_argument('--max_grad_norm', type=float, default=1.0,
                         help='Max grad norm for clipping.')
-    parser.add_argument('--bc_coef', type=float, default=0.1,
+    parser.add_argument('--bc_coef', type=float, default=0.3,
                         help='Behavior-cloning regularizer weight (KL-to-behavior proxy under fixed log_std). Set 0 to disable.')
     parser.add_argument('--value_coef', type=float, default=50.0,
                         help='Weight for value regression loss during joint training. '
                              'Needs to be large because policy_loss is O(10) while value_loss is O(0.04).')
     # Value warmup / validation / early stopping
-    parser.add_argument('--value_warmup_epochs', type=int, default=5,
+    parser.add_argument('--value_warmup_epochs', type=int, default=2,
                         help='Train value net only for the first N epochs, then jointly train policy+value. Ignored if --train_value_net_only.')
     parser.add_argument('--val_split', type=float, default=0.1,
                         help='Fraction of offline dataset held out for validation. 0 disables validation.')
-    parser.add_argument('--early_stop_patience', type=int, default=0,
+    parser.add_argument('--early_stop_patience', type=int, default=3,
                         help='Early stop after N non-improving val epochs. 0 disables.')
     # Robustness against outlier samples in value regression & advantage weighting
     parser.add_argument('--reset_value_net', action='store_true', default=False,
@@ -107,7 +107,7 @@ def main():
                         help='Huber loss delta (|error|>delta switches from quadratic to linear). '
                              'For returns in [-1,0], delta=1 behaves like MSE for most samples and '
                              'only clips rare extreme errors -- keeps value gradient strong enough to learn.')
-    parser.add_argument('--combined_weight_max', type=float, default=5.0,
+    parser.add_argument('--combined_weight_max', type=float, default=20.0,
                         help='Cap on (awac_w * b_weights) per sample to prevent outlier domination.')
     parser.add_argument('--use_weighted_sampler', default=True,
                         help='Use WeightedRandomSampler so each batch over-represents high-weight (rare critical) '
@@ -116,18 +116,18 @@ def main():
     parser.add_argument('--filter_awac', default=True,
                         help='In filter-BC mode, additionally weight kept samples by exp(adv/beta). This reuses '
                              'the value function to prioritize the best non-crash samples without imitating crashes.')
-    parser.add_argument('--oob_coef', type=float, default=1,
+    parser.add_argument('--oob_coef', type=float, default=5,
                         help='Coefficient on the out-of-bounds soft penalty on pred_act. Zero-gradient inside '
                              '[-oob_bound, +oob_bound], quadratic outside. Keeps MLP extrapolation in check on '
                              'OOD states without hard-clipping gradients inside the data range. Set 0 to disable.')
     parser.add_argument('--oob_bound', type=float, default=5.0,
                         help='Action magnitude above which the OOB penalty engages. Dataset actions are within '
                              '[-5, 5], so 5 is the natural choice.')
-    parser.add_argument('--crash_coef', type=float, default=0.5,
+    parser.add_argument('--crash_coef', type=float, default=3.0,
                         help='Weight for action-space hinge repulsion on crash samples. '
                              'Loss = relu(crash_margin - ||pred_act - crash_act||^2), bounded and zero once '
                              'policy is far enough from crash actions. Only active when filter_bc=True.')
-    parser.add_argument('--crash_margin', type=float, default=4.0,
+    parser.add_argument('--crash_margin', type=float, default=1.0,
                         help='L2-squared margin for crash repulsion hinge. Policy stops being penalized once '
                              '||pred_act - crash_act||^2 >= crash_margin. With 12-dim actions ~N(0,1.87^2), '
                              'margin=4 corresponds to mean per-dim offset of ~0.58 (about 0.3 std).')
@@ -319,7 +319,7 @@ def main():
                             if weights[i] > 0 and weights[i] != weights[i-1]:
                                 cur_weight *= weights[i]
                             if dones[i]:
-                                cur_weight = max(cur_weight, 0.1)
+                                # cur_weight = max(cur_weight, 0.1)
                                 unified_weights[idx_start:i+1] = cur_weight
                                 idx_start = i + 1
                                 cur_weight = 1.0
@@ -345,8 +345,9 @@ def main():
         acts_t = torch.tensor(all_acts, dtype=torch.float32)
         returns_t = torch.tensor(all_returns, dtype=torch.float32)
         weights_t = torch.tensor(all_weights, dtype=torch.float32)
+        weights_t = weights_t.clamp(max=1e-1)
         weights_t = weights_t / (weights_t.mean() + 1e-8)
-        weights_t = torch.clamp(weights_t, max=10.0)
+        weights_t = torch.clamp(weights_t, max=30.0)
         log_prob_t = torch.tensor(all_log_prob, dtype=torch.float32)
         print(f'Loaded offline dataset with {len(obs_t)} samples from {len(data_dirs)} directories')
 
@@ -388,7 +389,7 @@ def main():
                     w_tensor = ds.tensors[3][train_ds_.indices]
                 else:
                     w_tensor = ds.tensors[3]
-                w_sample = w_tensor.clamp(min=1e-3).double()
+                w_sample = w_tensor.clamp(min=1e-4).double()
                 sampler = WeightedRandomSampler(
                     weights=w_sample, num_samples=len(train_ds_), replacement=True
                 )
