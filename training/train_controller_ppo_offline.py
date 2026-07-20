@@ -58,7 +58,7 @@ def main():
     parser.add_argument('--run_name', type=str, default='run_offline_round8', help='Subdirectory name for this training run')
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
-    parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
+    parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1/model/stage1_criticality_best_new_3.pt', help='Path to criticality model')
     # parser.add_argument('--initial', default='training/models/actor_init.zip')
     parser.add_argument('--initial', default='training/models/run_offline_round7/best.policy.pt')
     parser.add_argument('--log_std', type=float, default=None,

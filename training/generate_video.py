@@ -164,7 +164,7 @@ def main(args):
     try:
         from criticality.utils.criticality_model import SimpleClassifier
         criticality_model = SimpleClassifier(input_dim=56)
-        criticality_model.load_state_dict(torch.load('criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', map_location='cpu', weights_only=False))
+        criticality_model.load_state_dict(torch.load('criticality/stage1/model/stage1_criticality_best_new_3.pt', map_location='cpu', weights_only=False))
         criticality_model.to('cpu').eval()
     except Exception:
         criticality_model = None

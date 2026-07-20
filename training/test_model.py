@@ -105,7 +105,7 @@ def run(args):
 
     from criticality.utils.criticality_model import SimpleClassifier
     criticality_model = SimpleClassifier(input_dim=56)
-    criticality_model.load_state_dict(torch.load('criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', map_location='cpu', weights_only=False))
+    criticality_model.load_state_dict(torch.load('criticality/stage1/model/stage1_criticality_best_new_3.pt', map_location='cpu', weights_only=False))
     criticality_model.to('cpu').eval()
 
     from stable_baselines3 import PPO as SB3PPO
@@ -187,8 +187,6 @@ def run(args):
                     q_list = 0.99 * (criticality / np.sum(criticality)) + 0.01 * np.ones_like(criticality) / len(criticality)
                     q_list = q_list / np.sum(q_list)
                     idx = np.random.choice(np.arange(candidates_arr.shape[0]), p=q_list)
-                    # idx = int(np.argmax(criticality))
-                    # weight = float((1 / len(criticality)) / (criticality[idx] / np.sum(criticality)))
                     weight = float((1 / len(criticality)) / q_list[idx])
                 else:
                     idx = np.random.randint(0, candidates_arr.shape[0])

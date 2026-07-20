@@ -202,8 +202,8 @@ if __name__ == '__main__':
     parser.add_argument('--max_steps', type=int, default=40)
     parser.add_argument('--log_interval', type=int, default=10)
     # parser.add_argument('--model_path', type=str, default='criticality/stage1/model/stage1_criticality_best_new_1.pt', help='Optional criticality model')
-    parser.add_argument('--model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Optional criticality model')
-    # parser.add_argument('--model_path', type=str, default='criticality/stage2/model/stage2_new_1_epoch5950.pt', help='Optional criticality model')
+    parser.add_argument('--model_path', type=str, default='criticality/stage1/model/stage1_criticality_best_new_3.pt', help='Optional criticality model')
+
     parser.add_argument('--out', type=str, default='results/nade/', help='Path to save weighted failures numpy array')
     parser.add_argument('--criticality_out', type=str, default=None, help='Optional path to save criticality dataset (obs, actions, labels)')
     parser.add_argument('--save_interval', type=int, default=1, help='Save results every N episodes at log interval')

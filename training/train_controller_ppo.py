@@ -69,7 +69,7 @@ def main():
     parser.add_argument('--initial', default='training/models/run_offline_round1/ep50.policy.pt')
     parser.add_argument('--log_std', type=float, default=-3, help='Initial log standard deviation for the policy (default: -2.5)')
     parser.add_argument('--nade', action='store_true', help='Whether to use NADE policy architecture (default: False)')
-    parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1_plus/model/stage1_plus_criticality_best_new_3.pt', help='Path to criticality model')
+    parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1/model/stage1_criticality_best_new_3.pt', help='Path to criticality model')
     parser.add_argument('--critical_threshold', type=float, default=0.8, help='Criticality threshold (default: 0.5)')
     parser.add_argument('--train_value_net_only', action='store_true', help='Whether to train only the value network (default: False, trains both policy and value)')
     args = parser.parse_args()
