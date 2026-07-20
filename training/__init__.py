@@ -5,4 +5,4 @@ used to train the Go2 controller (controller-only; NADE/terrain helpers
 have been removed).
 """
 
-__all__ = ["controller_env", "train_controller_ppo"]
+__all__ = ["controller_env"]
