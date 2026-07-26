@@ -79,7 +79,7 @@ class TestEnv:
         # MuJoCo model
         self.model = mujoco.MjModel.from_xml_path(self.go2_config["xml_path"])
         self.data = mujoco.MjData(self.model)
-        self.model.opt.timestep = self.go2_config["simulation_dt"]  # 仿真步长，等于Go2的控制步长
+        self.model.opt.timestep = self.go2_config["simulation_dt"]  # Simulation timestep, equal to Go2 control timestep
 
         # Terrain setup
         with open(f"{os.path.dirname(os.path.realpath(__file__))}/{terrain_config_file}", "r", encoding="utf-8") as f:
@@ -113,7 +113,7 @@ class TestEnv:
         # Observation config for terrain agent.
         obs_cfg = self.terrain_config.get("observation", {})
         self.obs_include_last_action = bool(obs_cfg.get("include_last_action", True))
-        self.obs_include_foot_contacts = bool(obs_cfg.get("include_foot_contacts", False))  # TODO 暂定False，相关功能待验证，也可能不需要
+        self.obs_include_foot_contacts = bool(obs_cfg.get("include_foot_contacts", False))  # TODO Temporarily False, feature to be verified, may not be needed
         self.obs_contact_force_threshold = float(obs_cfg.get("contact_force_threshold", 1.0))
         local_cfg = obs_cfg.get("local_height_map", {})
         self.local_map_enabled = bool(local_cfg.get("enabled", True))
@@ -205,9 +205,9 @@ class TestEnv:
         self._collision_reported = False
         # return initial robot observation (single value)
 
-        # 前10帧不控制，且提供2s的保护时间
+        # No control for first 10 frames, with 2s protection time
         target_dof_pos = self.go2_controller.default_angles.copy()
-        total_sim_steps = int(self.init_skip_time / self.model.opt.timestep) + self.init_skip_frame  # 2s保护时间 + 10帧控制空窗期
+        total_sim_steps = int(self.init_skip_time / self.model.opt.timestep) + self.init_skip_frame  # 2s protection time + 10 frames control blanking period
         for sim_i in range(total_sim_steps):
             self.robot_counter += 1
             step_start = time.time()
@@ -230,7 +230,7 @@ class TestEnv:
                     self.viewer.cam.lookat[:] = self.data.qpos[:3]
                 self.viewer.sync()
 
-            if self.realtime_sim:  # 只能确保仿真不比真实世界快，但是可能会比真实世界慢，取决于计算开销
+            if self.realtime_sim:  # Only ensures sim not faster than real-time, may be slower depending on computation
                 time_until_next_step = self.model.opt.timestep - (time.time() - step_start)
                 if time_until_next_step > 0:
                     time.sleep(time_until_next_step)
@@ -374,7 +374,7 @@ class TestEnv:
                     self.viewer.cam.lookat[:] = self.data.qpos[:3]
                 self.viewer.sync()
 
-            if self.realtime_sim:  # 只能确保仿真不比真实世界快，但是可能会比真实世界慢，取决于计算开销
+            if self.realtime_sim:  # Only ensures sim not faster than real-time, may be slower depending on computation
                 time_until_next_step = self.model.opt.timestep - (time.time() - step_start)
                 if time_until_next_step > 0:
                     time.sleep(time_until_next_step)
@@ -437,7 +437,7 @@ class TestEnv:
                     self.viewer.cam.lookat[:] = self.data.qpos[:3]
                 self.viewer.sync()
 
-            if self.realtime_sim:  # 只能确保仿真不比真实世界快，但是可能会比真实世界慢，取决于计算开销
+            if self.realtime_sim:  # Only ensures sim not faster than real-time, may be slower depending on computation
                 time_until_next_step = self.model.opt.timestep - (time.time() - step_start)
                 if time_until_next_step > 0:
                     time.sleep(time_until_next_step)
@@ -461,7 +461,7 @@ class TestEnv:
 
         return next_terrain_obs, None, float(total_reward), done, info
 
-    # TODO 梅花桩相关
+    # TODO plum blossom pile related
     def set_robot_spawn_pose(self, x=0.0, y=0.0, z=None, yaw=0.0):
         """Set robot root pose before rollouts (for pile tests and scripted starts)."""
         self.data.qpos[0] = float(x)
@@ -520,7 +520,7 @@ class TestEnv:
         """Terrain obs = robot obs + optional foot contacts + optional local map + optional last terrain action."""
         robot_obs = safe_call(self.go2_controller.get_observation_without_prev_action, d=self.data, counter=self.robot_counter)
         # robot_obs = self.go2_controller.get_observation(self.data).astype(np.float32)
-        # robot_obs = robot_obs[:len(robot_obs) - self.go2_controller.num_actions]  # TODO 去掉robot obs中的last action部分
+        # robot_obs = robot_obs[:len(robot_obs) - self.go2_controller.num_actions]  # TODO remove last action part from robot obs
         chunks = [robot_obs]
 
         if self.obs_include_foot_contacts:
@@ -558,7 +558,7 @@ class TestEnv:
 
         size_x = float(self.model.hfield_size[hfield_id][0])  # half-size x
         size_y = float(self.model.hfield_size[hfield_id][1])  # half-size y
-        z_scale = float(self.model.hfield_size[hfield_id][2])  # TODO 所有涉及到高度的地方都应该乘以z_scale，目前地图设置z_scale=1所以不用乘
+        z_scale = float(self.model.hfield_size[hfield_id][2])  # TODO all height values should be multiplied by z_scale; currently z_scale=1 so skip
 
         center_x = float(self.model.geom_pos[self.terrain_changer.geom_id][0])
         center_y = float(self.model.geom_pos[self.terrain_changer.geom_id][1])
@@ -658,7 +658,7 @@ class TestEnv:
 
         return (abs(x - center_x) >= half_x) or (abs(y - center_y) >= half_y)
 
-    # TODO 增加stuck TODO 111
+    # TODO add stuck TODO 111
     def _compute_done(self, fallen: bool, base_collision: bool, thigh_collision: bool, out_of_terrain_edge: bool, stuck: bool) -> bool:
         if self._is_failure_enabled("fallen") and fallen and self.terrain_config["termination"]["terminate_on_fall"]:
             return True

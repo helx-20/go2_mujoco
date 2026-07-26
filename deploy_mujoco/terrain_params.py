@@ -68,7 +68,7 @@ class TerrainChanger:
             while viewer.is_running():
                 if step % 20000 == 0:
 
-                    # 测试用
+                    # For testing
                     # action = ...
                     # action = np.random.uniform(-1.0, 1.0, (self.total_action_dims,))
                     # self.apply_action_vector(action)
@@ -100,19 +100,19 @@ class TerrainChanger:
         return float(grid_res_x), float(grid_res_y)
 
     def _refresh_terrain_safe(self):
-        # --- [步骤 A] 备份当前机器人状态 ---
+        # --- [Step A] Back up current robot state ---
         qpos_backup = self.data.qpos.copy()
         qvel_backup = self.data.qvel.copy()
         act_backup = self.data.act.copy()
 
         mujoco.mj_setConst(self.model, self.data)
 
-        # --- 还原状态 ---
+        # --- Restore state ---
         self.data.qpos[:] = qpos_backup
         self.data.qvel[:] = qvel_backup
         self.data.act[:] = act_backup
 
-        # mujoco.mj_forward(self.model, self.data)  # 修改地形后不直接做step，step在主逻辑中操作
+        # mujoco.mj_forward(self.model, self.data)  # Don't step directly after terrain modification; stepping is handled in main logic
 
     def _refresh_terrain(self):
         mujoco.mj_setConst(self.model, self.data)
@@ -151,7 +151,7 @@ class TerrainChanger:
             lin_vel = self.data.qvel[:2].copy()
             speed = np.linalg.norm(lin_vel)
 
-            # 确定速度方向 dir_f
+            # Determine velocity direction dir_f
             if speed > 1e-3:
                 dir_f = lin_vel / speed
             else:
@@ -159,7 +159,7 @@ class TerrainChanger:
                 yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
                 dir_f = np.array([np.cos(yaw), np.sin(yaw)])
 
-            # dump 相对坐标圆心[dist, lat]
+            # dump relative coordinate center [dist, lat]
             min_forward_dist = self.terrain_config['terrain_action']['min_forward_dist']
             max_forward_dist = self.terrain_config['terrain_action']['max_forward_dist']
             max_lateral = self.terrain_config['terrain_action']['max_lateral']
@@ -180,7 +180,7 @@ class TerrainChanger:
             # scale height to configured max
             height_scaled = float(height) * max_bump_height
 
-            # 保护机器人所在区域不被修改
+            # Protect robot area from modification
             robot_gx, robot_gy = self._world_to_grid(float(robot_xy[0]), float(robot_xy[1]))
             self.set_bump(
                 int(gx),
@@ -229,7 +229,7 @@ class TerrainChanger:
             lin_vel = self.data.qvel[:2].copy()
             speed = np.linalg.norm(lin_vel)
 
-            # 确定速度方向 dir_f
+            # Determine velocity direction dir_f
             if speed > 1e-3:
                 dir_f = lin_vel / speed
             else:
@@ -237,7 +237,7 @@ class TerrainChanger:
                 yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
                 dir_f = np.array([np.cos(yaw), np.sin(yaw)])
 
-            # dump 相对坐标圆心[dist, lat]
+            # dump relative coordinate center [dist, lat]
             min_forward_dist = self.terrain_config['terrain_action']['min_forward_dist']
             max_forward_dist = self.terrain_config['terrain_action']['max_forward_dist']
             max_lateral = self.terrain_config['terrain_action']['max_lateral']
@@ -258,7 +258,7 @@ class TerrainChanger:
             # scale height to configured max
             height_scaled = float(height) * max_bump_height
 
-            # 保护机器人所在区域不被修改
+            # Protect robot area from modification
             robot_gx, robot_gy = self._world_to_grid(float(robot_xy[0]), float(robot_xy[1]))
             restore_info = self.set_bump_with_restore(
                 int(gx),
@@ -303,7 +303,7 @@ class TerrainChanger:
             lin_vel = qvel[:2].copy()
             speed = np.linalg.norm(lin_vel)
 
-            # 确定速度方向 dir_f
+            # Determine velocity direction dir_f
             if speed > 1e-3:
                 dir_f = lin_vel / speed
             else:
@@ -311,7 +311,7 @@ class TerrainChanger:
                 yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
                 dir_f = np.array([np.cos(yaw), np.sin(yaw)])
 
-            # dump 相对坐标圆心[dist, lat]
+            # dump relative coordinate center [dist, lat]
             min_forward_dist = self.terrain_config['terrain_action']['min_forward_dist']
             max_forward_dist = self.terrain_config['terrain_action']['max_forward_dist']
             max_lateral = self.terrain_config['terrain_action']['max_lateral']
@@ -332,7 +332,7 @@ class TerrainChanger:
             # scale height to configured max
             height_scaled = float(height) * max_bump_height
 
-            # 保护机器人所在区域不被修改
+            # Protect robot area from modification
             robot_gx, robot_gy = self._world_to_grid(float(robot_xy[0]), float(robot_xy[1]))
             self.set_bump(
                 int(gx),
@@ -374,13 +374,13 @@ class TerrainChanger:
 
                 if dist < radius:
 
-                    # ===== 机器人保护区域 =====
+                    # ===== Robot Protection Area =====
                     dx_r = col - robot_gx
                     dy_r = row - robot_gy
                     dist_robot = np.sqrt(dx_r * dx_r + dy_r * dy_r)
 
                     if no_change_radius and dist_robot < no_change_radius_grid:
-                        continue  # 不允许修改
+                        continue  # modification not allowed
 
                     self.hfield[row, col] = height * np.exp(
                         -dist ** 2 / (2 * radius ** 2)
@@ -410,15 +410,15 @@ class TerrainChanger:
 
                 if dist < radius:
 
-                    # ===== 机器人保护区域 =====
+                    # ===== Robot Protection Area =====
                     dx_r = col - robot_gx
                     dy_r = row - robot_gy
                     dist_robot = np.sqrt(dx_r * dx_r + dy_r * dy_r)
 
                     if no_change_radius and dist_robot < no_change_radius_grid:
-                        continue  # 不允许修改
+                        continue  # modification not allowed
 
-                    restore_info.append((row, col, self.hfield[row, col]))  # 记录修改前的高度值，以便后续恢复
+                    restore_info.append((row, col, self.hfield[row, col]))  # record pre-modification height for later restoration
                     self.hfield[row, col] = height * np.exp(
                         -dist ** 2 / (2 * radius ** 2)
                     )
@@ -458,7 +458,7 @@ class TerrainChanger:
         self.hfield[:, :] = (1.0 - w) * target_height + w * self.hfield[:, :]
         self._refresh_terrain_safe()
 
-    # TODO 初始化速度很慢
+    # TODO initialization is very slow
     def generate_bumps_terrain(self, bumps_array, safe_pos=(0.0, 0.0), safe_radius=0):
         """Initialize terrain from a bumps list.
 
@@ -578,7 +578,7 @@ class TerrainChanger:
 
         self._refresh_terrain_safe()
 
-    # TODO 检查是否有问题
+    # TODO check for issues
     def update_plum_blossom_piles(self, control_list):
         """Control pile heights.
 
@@ -601,13 +601,13 @@ class TerrainChanger:
 
 if __name__ == "__main__":
 
-    # yaml 读取测试
+    # yaml read test
     config_file = "terrain_config.yaml"
     print(f"{os.path.dirname(os.path.realpath(__file__))}/{config_file}")
     with open(f"{os.path.dirname(os.path.realpath(__file__))}/{config_file}", "r", encoding="utf-8") as f:
         terrain_config = yaml.load(f, Loader=yaml.FullLoader)
 
-    # 使用get嵌套读取
+    # Use get for nested reading
     print(terrain_config["x"])
     print(terrain_config.get("x"))
     print(terrain_config.get("plum_blossom").get("foot_clearance_m"))
@@ -620,11 +620,11 @@ if __name__ == "__main__":
     model = mujoco.MjModel.from_xml_path(f"{os.path.dirname(os.path.realpath(__file__))}/robots/go2/scene_terrain.xml")
     data = mujoco.MjData(model)
 
-    # 动态生成bump
+    # Dynamically generate bumps
     # terrain_changer = TerrainChanger(model, data, action_dims={'bump':4}, config_file="terrain_config.yaml")
     # terrain_changer.run()
 
-    # 三角函数组合
+    # Trigonometric function combination
     # terrain_changer = TerrainChanger(model, data, action_dims={}, config_file="terrain_config.yaml")
     # angle_array = []
     # for i in range(10):
@@ -635,7 +635,7 @@ if __name__ == "__main__":
     # terrain_changer.enforce_safe_spawn_area()
     # terrain_changer.run()
 
-    # 初始化bumps
+    # Initialize bumps
     terrain_changer = TerrainChanger(model, data, action_dims={}, config_file="terrain_config.yaml")
     bumps_array = []
     for _ in range(100):

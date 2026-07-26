@@ -1,10 +1,10 @@
 ## NOTES
-# 注意将这里的参数与 isaaclab 训练时的参数对齐，部分参数对应如下：
-# - kps, kds: `source/isaaclab_assets/isaaclab_assets/robots/unitree.py`下对应`stiffness`和`damping`
-# - default_angles: 见`source/isaaclab_assets/isaaclab_assets/robots/unitree.py`的`init_state`
-# - lin_vel_scale, ang_vel_scale, dof_pos_scale, dof_vel_scale: 见`source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/velocity_env_cfg.py`下的`ObsTerm`，缺省为`1`
-# - action_scale: `source/isaaclab_tasks/isaaclab_tasks/manager_based/locomotion/velocity/config/go2/rough_env_cfg.py`中reduce到`0.25`
-# - cmd_scale: 对应`[lin_vel_x_scale, lin_vel_y_scale, ang_vel_scale]`因此缺省为`[1,1,1]`
+# Note: align these parameters with Isaac Lab training config. Parameter correspondences:
+# - kps, kds: correspond to `stiffness` and `damping` in `source/isaaclab_assets/isaaclab_assets/robots/unitree.py`
+# - default_angles: see `init_state` in `source/isaaclab_assets/isaaclab_assets/robots/unitree.py`
+# - lin_vel_scale, ang_vel_scale, dof_pos_scale, dof_vel_scale: see `ObsTerm` in velocity_env_cfg.py, default `1`
+# - action_scale: reduced to `0.25` in rough_env_cfg.py
+# - cmd_scale: corresponds to `[lin_vel_x_scale, lin_vel_y_scale, ang_vel_scale]`, default `[1,1,1]`
 ## delete this later
 
 policy_path: "pre_train/go2/go2_controller.pt"

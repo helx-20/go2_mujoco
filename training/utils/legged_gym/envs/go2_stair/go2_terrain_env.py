@@ -108,7 +108,7 @@ class Go2TerrainRobot(BaseTask):
         self._post_physics_step_callback()
 
         # compute observations, rewards, resets, ...
-        # 强行设置为False
+        # Force set to False
         # self.reset_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long) 
         self.check_termination()
         self.compute_reward()
@@ -129,13 +129,13 @@ class Go2TerrainRobot(BaseTask):
     def check_termination(self):
         """ Check if environments need to be reset
         """
-        self.reset_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 1., dim=1) # 修改 1.
-        self.reset_buf |= torch.logical_or(torch.abs(self.rpy[:,1])>1.0, torch.abs(self.rpy[:,0])>0.8) # 修改 1.0, 0.8
+        self.reset_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 1., dim=1) # modified 1.
+        self.reset_buf |= torch.logical_or(torch.abs(self.rpy[:,1])>1.0, torch.abs(self.rpy[:,0])>0.8) # modified 1.0, 0.8
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
         # print("self.max_episode_length: ", self.max_episode_length) # 1001
-        # self.finished_buf = self.base_pos[:, 2] < -0.35 # 下降楼梯到一定高度
+        # self.finished_buf = self.base_pos[:, 2] < -0.35 # descend stairs to a certain height
         # # print("finished_buf: ", self.finished_buf)
-        # self.time_out_buf |= self.finished_buf # 这种也算timeout
+        # self.time_out_buf |= self.finished_buf # this also counts as timeout
         self.reset_buf |= self.time_out_buf
 
     def reset_idx(self, env_ids):
@@ -158,7 +158,7 @@ class Go2TerrainRobot(BaseTask):
         self._resample_commands(env_ids)
 
         # reset buffers
-        self.actions[env_ids] = 0. # 加上了
+        self.actions[env_ids] = 0. # added
         self.last_actions[env_ids] = 0.
         self.last_dof_vel[env_ids] = 0.
         self.feet_air_time[env_ids] = 0.
@@ -197,7 +197,7 @@ class Go2TerrainRobot(BaseTask):
             rew = self._reward_termination() * self.reward_scales["termination"]
             self.rew_buf += rew
             self.episode_sums["termination"] += rew
-        # # 增加达到楼梯下面的奖励
+        # # Add reward for reaching below the stairs
         # if "termination" in self.reward_scales:
         #     rew = self.finished_buf.float() * self.reward_scales["finish_reward"]
         #     self.rew_buf += rew
@@ -237,7 +237,7 @@ class Go2TerrainRobot(BaseTask):
         elif mesh_type == "trimesh":
             self._create_trimesh()
         self._create_envs()
-        # # 增加楼梯
+        # # Add stairs
         # self._create_stairs(env_handle)
 
     def set_camera(self, position, lookat):
@@ -463,7 +463,7 @@ class Go2TerrainRobot(BaseTask):
         noise_vec[12:12+self.num_actions] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
         noise_vec[12+self.num_actions:12+2*self.num_actions] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
         noise_vec[12+2*self.num_actions:12+3*self.num_actions] = 0. # previous actions
-        # noise_vec[12+3*self.num_actions:12+3*self.num_actions+2] = 0  # TODO 位置的noise设置0
+        # noise_vec[12+3*self.num_actions:12+3*self.num_actions+2] = 0  # TODO set position noise to 0
         return noise_vec
 
     #----------------------------------------
@@ -592,7 +592,7 @@ class Go2TerrainRobot(BaseTask):
 
         tm_params.transform.p.x = -self.terrain.cfg.border_size 
         tm_params.transform.p.y = -self.terrain.cfg.border_size
-        tm_params.transform.p.z = -0.0 # 略低于地面
+        tm_params.transform.p.z = -0.0 # slightly below ground
         tm_params.static_friction = self.cfg.terrain.static_friction
         tm_params.dynamic_friction = self.cfg.terrain.dynamic_friction
         tm_params.restitution = self.cfg.terrain.restitution
@@ -602,24 +602,24 @@ class Go2TerrainRobot(BaseTask):
         self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
 
     def _create_stairs(self, gym_env):
-        num_steps = 5  # 台阶数量
-        step_height = 0.1  # 每个台阶的高度
-        step_width = 0.5  # 每个台阶的宽度
-        step_depth = 0.3  # 每个台阶的深度
+        num_steps = 5  # number of steps
+        step_height = 0.1  # height of each step
+        step_width = 0.5  # width of each step
+        step_depth = 0.3  # depth of each step
 
-        # 创建楼梯
+        # Create stairs
         for i in range(num_steps):
-            # 设置每个台阶的位置
+            # Set the position of each step
             pose = gymapi.Transform()
             pose.p = gymapi.Vec3(i * step_depth, 0, i * step_height)
             
-            # 创建台阶的形状
+            # Create the shape of the step
             asset_options = gymapi.AssetOptions()
             asset_options.fix_base_link = True
             asset_options.disable_gravity = True
             box_asset = self.gym.create_box(self.sim, step_width, step_depth, step_height, asset_options)
             
-            # 添加台阶到环境中
+            # Add step to the environment
             self.gym.create_actor(gym_env, box_asset, pose, "stair_" + str(i), i, 0)
 
     def _create_envs(self):
@@ -720,7 +720,7 @@ class Go2TerrainRobot(BaseTask):
             # put robots at the origins defined by the terrain
             max_init_level = self.cfg.terrain.max_init_terrain_level
             # if not self.cfg.terrain.curriculum: max_init_level = self.cfg.terrain.num_rows - 1
-            max_init_level = self.cfg.terrain.num_rows - 1 # 一般而言，让num_rows=cfg.terrain.max_init_terrain_level 控制level相同
+            max_init_level = self.cfg.terrain.num_rows - 1 # Generally set num_rows=cfg.terrain.max_init_terrain_level to keep levels consistent
             self.terrain_levels = torch.randint(0, max_init_level+1, (self.num_envs,), device=self.device)
             self.terrain_types = torch.div(torch.arange(self.num_envs, device=self.device), (self.num_envs/self.cfg.terrain.num_cols), rounding_mode='floor').to(torch.long)
             self.max_terrain_level = self.cfg.terrain.num_rows
@@ -776,10 +776,10 @@ class Go2TerrainRobot(BaseTask):
     def render_step(self, obs=None, sync_frame_time=True):
         '''*************************************************************************
         [function name]         render_step
-        [function detail]       渲染单帧状态
-        [params]                data: grad_dots梯度点乘 num_sample_iterations * 120
-                                gamma: 计算critical_indices的参数
-        [return]                np.ndarray | critical_indices: 选出的编号
+        [function detail]       Render single frame state
+        [params]                data: grad_dots gradient dot product, num_sample_iterations * 120
+                                gamma: parameter for computing critical_indices
+        [return]                np.ndarray | critical_indices: selected indices
         [developer]             yjx, 2025.02
         [change log]            
         *************************************************************************'''

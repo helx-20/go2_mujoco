@@ -51,16 +51,16 @@ def make_env_fn(normal_policy, max_episode_steps=1000, nade=False, criticality_m
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--rl_device', type=str, default='cuda:2')
+    parser.add_argument('--rl_device', type=str, default='cuda:0')
     parser.add_argument('--max_steps', type=int, default=30)
     parser.add_argument('--n_eval_episodes', type=int, default=1, help='Number of episodes per evaluation')
     parser.add_argument('--out', type=str, default='training/models/')
-    parser.add_argument('--run_name', type=str, default='run_offline_round8', help='Subdirectory name for this training run')
+    parser.add_argument('--run_name', type=str, default='run_offline_random', help='Subdirectory name for this training run')
     parser.add_argument('--pretrain', type=str, default='training/models/actor_init.zip',
                         help='Path to a pretrained PyTorch model or SB3 .zip to initialize normal policy (default uses training/models/actor_init.zip)')
     parser.add_argument('--criticality_model_path', type=str, default='criticality/stage1/model/stage1_criticality_best_new_3.pt', help='Path to criticality model')
-    # parser.add_argument('--initial', default='training/models/actor_init.zip')
-    parser.add_argument('--initial', default='training/models/run_offline_round7/best.policy.pt')
+    parser.add_argument('--initial', default='training/models/actor_init.zip')
+    # parser.add_argument('--initial', default='training/models/run_offline_round7/best.policy.pt')
     parser.add_argument('--log_std', type=float, default=None,
                         help='Initial log_std for policy distribution (per-dim, trainable). '
                              '-1 (std ~= 0.37) matches the collection-time setting and keeps the '
@@ -68,7 +68,7 @@ def main():
                              'Extreme logp on outlier data points is bounded by max_grad_norm clipping.')
     parser.add_argument('--log_std_min', type=float, default=-4.0, help='Lower clamp on trainable log_std during loss computation.')
     parser.add_argument('--log_std_max', type=float, default=1.0, help='Upper clamp on trainable log_std during loss computation.')
-    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/round7', '/mnt/mnt1/linxuan/go2_data/data/training/round7_append', '/mnt/mnt1/linxuan/go2_data/data/training/round7', '/mnt/mnt1/linxuan/go2_data/data/training/round7_thr05', '/mnt/mnt1/linxuan/go2_data/data/training/round8', '/mnt/mnt1/linxuan/go2_data/data/training/round8_append'], help='Path to offline dataset directory')
+    parser.add_argument('--dataset', type=list, default=['/mnt/mnt1/linxuan/go2_data/data/training/nde_data'], help='Path to offline dataset directory')
     parser.add_argument('--offline_epochs', type=int, default=30, help='Epochs for offline training')
     parser.add_argument('--offline_batch_size', type=int, default=2048)
     parser.add_argument('--offline_lr', type=float, default=1e-4)
@@ -83,7 +83,7 @@ def main():
                         help='Upper clip for exp(adv/beta) to prevent exploding weights.')
     parser.add_argument('--max_grad_norm', type=float, default=1.0,
                         help='Max grad norm for clipping.')
-    parser.add_argument('--bc_coef', type=float, default=0.3,
+    parser.add_argument('--bc_coef', type=float, default=0.5,
                         help='Behavior-cloning regularizer weight (KL-to-behavior proxy under fixed log_std). Set 0 to disable.')
     parser.add_argument('--value_coef', type=float, default=50.0,
                         help='Weight for value regression loss during joint training. '
@@ -271,75 +271,90 @@ def main():
         all_obs, all_acts, all_returns, all_weights, all_log_prob = np.zeros((0, 48)), np.zeros((0, 12)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
         gamma = getattr(model, 'gamma', 0.99)
         for data_dir in data_dirs:
-            all_data_path = os.path.join(data_dir, 'all_data_unified_weight.npy')
-            if os.path.exists(all_data_path):
-                data = np.load(all_data_path, allow_pickle=True).item()
-                obs = np.array(data['obs'], dtype=np.float32)
-                acts = np.array(data['actions'], dtype=np.float32)
-                returns = np.array(data['returns'], dtype=np.float32)
-                weights = np.array(data['weights'], dtype=np.float32)
-                log_prob = np.array(data['log_prob'], dtype=np.float32)
+            all_data_path_npz = os.path.join(data_dir, 'all_data_unified_weight.npz')
+            all_data_path_npy = os.path.join(data_dir, 'all_data_unified_weight.npy')
+            cached = False
+            for cache_path, is_npz in [(all_data_path_npz, True), (all_data_path_npy, False)]:
+                if not os.path.exists(cache_path):
+                    continue
+                try:
+                    if is_npz:
+                        data = np.load(cache_path)
+                    else:
+                        data = np.load(cache_path, allow_pickle=True).item()
+                    obs = np.array(data['obs'], dtype=np.float32)
+                    acts = np.array(data['actions'], dtype=np.float32)
+                    returns = np.array(data['returns'], dtype=np.float32)
+                    weights = np.array(data['weights'], dtype=np.float32)
+                    log_prob = np.array(data['log_prob'], dtype=np.float32)
 
-                all_obs = np.concatenate([all_obs, obs])
-                all_acts = np.concatenate([all_acts, acts])
-                all_returns = np.concatenate([all_returns, returns])
-                all_weights = np.concatenate([all_weights, weights])
-                all_log_prob = np.concatenate([all_log_prob, log_prob])
-            else:
-                tmp_obs, tmp_acts, tmp_returns, tmp_weights, tmp_log_prob = np.zeros((0, 48)), np.zeros((0, 12)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
-                for filename in os.listdir(data_dir):
-                    if filename.endswith('.npy') and not filename.startswith('all'):
-                        path = os.path.join(data_dir, filename)
-                        try:
-                            data = np.load(path, allow_pickle=True).item()
-                        except Exception as e:
-                            continue
-                        obs = np.array(data['obs'], dtype=np.float32)
-                        acts = np.array(data['actions'], dtype=np.float32)
-                        rews = np.array(data['rewards'], dtype=np.float32)
-                        dones = np.array(data['dones'], dtype=np.float32)
-                        useful = np.array(data['useful'], dtype=bool)
-                        weights = np.array(data['weights'], dtype=np.float32)
-                        log_prob = np.array(data['log_prob'], dtype=np.float32)
+                    all_obs = np.concatenate([all_obs, obs])
+                    all_acts = np.concatenate([all_acts, acts])
+                    all_returns = np.concatenate([all_returns, returns])
+                    all_weights = np.concatenate([all_weights, weights])
+                    all_log_prob = np.concatenate([all_log_prob, log_prob])
+                    cached = True
+                    break
+                except Exception:
+                    print(f'Warning: failed to load cached {cache_path}, removing and regenerating...')
+                    os.remove(cache_path)
+            if cached:
+                continue
+            # Otherwise, process raw data files and build cache
+            tmp_obs, tmp_acts, tmp_returns, tmp_weights, tmp_log_prob = np.zeros((0, 48)), np.zeros((0, 12)), np.zeros((0,)), np.zeros((0,)), np.zeros((0,))
+            for filename in os.listdir(data_dir):
+                if filename.endswith('.npy') and not filename.startswith('all'):
+                    path = os.path.join(data_dir, filename)
+                    try:
+                        data = np.load(path, allow_pickle=True).item()
+                    except Exception:
+                        continue
+                    obs = np.array(data['obs'], dtype=np.float32)
+                    acts = np.array(data['actions'], dtype=np.float32)
+                    rews = np.array(data['rewards'], dtype=np.float32)
+                    dones = np.array(data['dones'], dtype=np.float32)
+                    useful = np.array(data['useful'], dtype=bool)
+                    weights = np.array(data['weights'], dtype=np.float32)
+                    log_prob = np.array(data['log_prob'], dtype=np.float32)
 
-                        # compute discounted returns per episode
-                        returns = np.zeros_like(rews, dtype=np.float32)
-                        G = 0.0
-                        for i in reversed(range(len(rews))):
-                            if dones[i]:
-                                G = rews[i]
-                            else:
-                                G = rews[i] + gamma * G
-                            returns[i] = G
+                    # compute discounted returns per episode
+                    returns = np.zeros_like(rews, dtype=np.float32)
+                    G = 0.0
+                    for i in reversed(range(len(rews))):
+                        if dones[i]:
+                            G = rews[i]
+                        else:
+                            G = rews[i] + gamma * G
+                        returns[i] = G
 
-                        unified_weights = np.zeros_like(weights, dtype=np.float32)
-                        cur_weight = 1.0
-                        idx_start = 0
-                        for i in range(1, len(weights)):
-                            if weights[i] > 0 and weights[i] != weights[i-1]:
-                                cur_weight *= weights[i]
-                            if dones[i]:
-                                # cur_weight = max(cur_weight, 0.1)
-                                unified_weights[idx_start:i+1] = cur_weight
-                                idx_start = i + 1
-                                cur_weight = 1.0
+                    unified_weights = np.zeros_like(weights, dtype=np.float32)
+                    cur_weight = 1.0
+                    idx_start = 0
+                    for i in range(1, len(weights)):
+                        if weights[i] > 0 and weights[i] != weights[i-1]:
+                            cur_weight *= weights[i]
+                        if dones[i]:
+                            # cur_weight = max(cur_weight, 0.1)
+                            unified_weights[idx_start:i+1] = cur_weight
+                            idx_start = i + 1
+                            cur_weight = 1.0
 
-                        useful_idx = np.where(useful)[0]
-                        if len(useful_idx) == 0:
-                            continue
+                    useful_idx = np.where(useful)[0]
+                    if len(useful_idx) == 0:
+                        continue
 
-                        tmp_obs = np.concatenate([tmp_obs, obs[useful_idx]])
-                        tmp_acts = np.concatenate([tmp_acts, acts[useful_idx]])
-                        tmp_returns = np.concatenate([tmp_returns, returns[useful_idx]])
-                        tmp_weights = np.concatenate([tmp_weights, unified_weights[useful_idx]])
-                        tmp_log_prob = np.concatenate([tmp_log_prob, log_prob[useful_idx]])
-                
-                np.save(all_data_path, {'obs': tmp_obs, 'actions': tmp_acts, 'returns': tmp_returns, 'weights': tmp_weights, 'log_prob': tmp_log_prob})
-                all_obs = np.concatenate([all_obs, tmp_obs])
-                all_acts = np.concatenate([all_acts, tmp_acts])
-                all_returns = np.concatenate([all_returns, tmp_returns])
-                all_weights = np.concatenate([all_weights, tmp_weights])
-                all_log_prob = np.concatenate([all_log_prob, tmp_log_prob])
+                    tmp_obs = np.concatenate([tmp_obs, obs[useful_idx]])
+                    tmp_acts = np.concatenate([tmp_acts, acts[useful_idx]])
+                    tmp_returns = np.concatenate([tmp_returns, returns[useful_idx]])
+                    tmp_weights = np.concatenate([tmp_weights, unified_weights[useful_idx]])
+                    tmp_log_prob = np.concatenate([tmp_log_prob, log_prob[useful_idx]])
+
+            np.savez_compressed(all_data_path_npz, obs=tmp_obs, actions=tmp_acts, returns=tmp_returns, weights=tmp_weights, log_prob=tmp_log_prob)
+            all_obs = np.concatenate([all_obs, tmp_obs])
+            all_acts = np.concatenate([all_acts, tmp_acts])
+            all_returns = np.concatenate([all_returns, tmp_returns])
+            all_weights = np.concatenate([all_weights, tmp_weights])
+            all_log_prob = np.concatenate([all_log_prob, tmp_log_prob])
 
         obs_t = torch.tensor(all_obs, dtype=torch.float32)
         acts_t = torch.tensor(all_acts, dtype=torch.float32)
@@ -353,7 +368,10 @@ def main():
 
         if args.debug_first_batch:
             def _stats(name, t):
-                q = torch.quantile(t, torch.tensor([0.0, 0.5, 0.9, 0.99, 1.0])).tolist()
+                # torch.quantile fails on large tensors; use sort + index instead
+                sorted_t, _ = torch.sort(t)
+                n = sorted_t.numel()
+                q = sorted_t[[0, n // 2, int(0.9 * (n - 1)), int(0.99 * (n - 1)), n - 1]].tolist()
                 print(f'  {name:10s} shape={tuple(t.shape)} '
                       f'min={q[0]:.4f} p50={q[1]:.4f} p90={q[2]:.4f} p99={q[3]:.4f} max={q[4]:.4f} '
                       f'mean={t.mean().item():.4f} std={t.std().item():.4f}')
@@ -377,7 +395,31 @@ def main():
         n_total = len(ds)
         n_val = int(n_total * args.val_split) if args.val_split > 0 else 0
         n_train = n_total - n_val
-        from torch.utils.data import WeightedRandomSampler
+        from torch.utils.data import WeightedRandomSampler, Sampler
+
+        # PyTorch's multinomial has a hard limit of 2^24 categories.
+        _MULTINOMIAL_LIMIT = 2 ** 24
+
+        class _ChunkedWeightedRandomSampler(Sampler):
+            """WeightedRandomSampler that works with > 2^24 categories by chunking
+            the multinomial draw so each call stays under the PyTorch limit."""
+            def __init__(self, weights, num_samples, replacement=True, generator=None):
+                self.weights = weights.double()
+                self.num_samples = num_samples
+                self.replacement = replacement
+                self.generator = generator
+
+            def __len__(self):
+                return self.num_samples
+
+            def __iter__(self):
+                remaining = self.num_samples
+                while remaining > 0:
+                    chunk = min(remaining, _MULTINOMIAL_LIMIT - 1)
+                    idx = torch.multinomial(self.weights, chunk,
+                                            self.replacement, generator=self.generator)
+                    yield from idx.tolist()
+                    remaining -= chunk
 
         def _make_train_loader(train_ds_):
             """Build training dataloader. If weighted sampling is enabled, sample with
@@ -389,10 +431,26 @@ def main():
                     w_tensor = ds.tensors[3][train_ds_.indices]
                 else:
                     w_tensor = ds.tensors[3]
-                w_sample = w_tensor.clamp(min=1e-4).double()
-                sampler = WeightedRandomSampler(
-                    weights=w_sample, num_samples=len(train_ds_), replacement=True
-                )
+
+                n_samples = len(train_ds_)
+
+                # When weights are uniform there is no benefit to weighted sampling.
+                w_min, w_max = w_tensor.min().item(), w_tensor.max().item()
+                if w_min == w_max:
+                    print('[Offline] weights are uniform → falling back to shuffle '
+                          '(WeightedRandomSampler unnecessary)')
+                    return DataLoader(train_ds_, batch_size=batch_size, shuffle=True)
+
+                # PyTorch multinomial has a hard limit of 2^24 categories.
+                if n_samples > _MULTINOMIAL_LIMIT:
+                    print(f'[Offline] {n_samples} samples exceeds multinomial limit '
+                          f'(2^24), using chunked weighted sampler')
+                    sampler = _ChunkedWeightedRandomSampler(
+                        weights=w_tensor, num_samples=n_samples, replacement=True)
+                else:
+                    w_sample = w_tensor.clamp(min=1e-4).double()
+                    sampler = WeightedRandomSampler(
+                        weights=w_sample, num_samples=n_samples, replacement=True)
                 return DataLoader(train_ds_, batch_size=batch_size, sampler=sampler)
             else:
                 return DataLoader(train_ds_, batch_size=batch_size, shuffle=True)

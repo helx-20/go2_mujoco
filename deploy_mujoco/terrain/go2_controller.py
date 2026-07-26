@@ -127,7 +127,7 @@ class Go2Controller:
 
         return target_dof_pos
 
-    def run(self):  # 独立启动仿真运行，仿真文件路径来源于config
+    def run(self):  # Start independent simulation run; sim file path from config
 
         # Load robot model
         m = mujoco.MjModel.from_xml_path(self.xml_path)
@@ -144,7 +144,7 @@ class Go2Controller:
             viewer.cam.lookat[:] = d.qpos[:3]
             # Close the viewer automatically after simulation_duration wall-seconds.
 
-            # 一定要先等几帧，不能马上控制
+            # Must wait a few frames first, cannot control immediately
             counter = 1
             while counter % self.control_decimation != 0:
                 try:

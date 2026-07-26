@@ -255,9 +255,9 @@ def weighted_analysis(orig: np.ndarray, new: np.ndarray,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--orig', default='training/results',
+    ap.add_argument('--orig', default='training/results_all/results_origin',
                     help='Path to .npy file, directory of .npy, or glob pattern for original policy results')
-    ap.add_argument('--new', default='training/results_all/results_round6_thresh05',
+    ap.add_argument('--new', default='training/results_all/results_random',
                     help='Same as --orig but for the new policy')
     ap.add_argument('--mode', choices=['auto', 'binary', 'weighted'], default='auto',
                     help='Force a test mode instead of auto-detecting from values')

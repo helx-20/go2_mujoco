@@ -56,8 +56,8 @@ class GO2TerrainCfg( LeggedRobotCfg ):
             torques = 0.0 # -0.0002
             dof_pos_limits = -0.0 # -1.0
             # termination = -1000 # -1000 # -5000 # -0.5
-            tracking_lin_vel = 0.0 # 暂时加的
-            tracking_ang_vel = 0.0 # 暂时加的
+            tracking_lin_vel = 0.0 # temporarily added
+            tracking_ang_vel = 0.0 # temporarily added
             termination = -0.0
             tracking_lin_vel = 0.0
             tracking_ang_vel = 0.0
@@ -90,8 +90,8 @@ class GO2TerrainCfg( LeggedRobotCfg ):
         terrain_length = 8. # 8.
         terrain_width = 8. # 8.
         curriculum = True
-        horizontal_scale = 0.1 # 0.05 # 自定义
-        slope_treshold = 1.5 # 自定义
+        horizontal_scale = 0.1 # 0.05 # custom
+        slope_treshold = 1.5 # custom
 
 class GO2TerrainCfgPPO( LeggedRobotCfgPPO ):
     seed = -1

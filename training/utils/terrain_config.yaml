@@ -1,33 +1,33 @@
-# 动态地形配置文件，可用于动态交互  后续摩擦等参数加在这里
+# Dynamic terrain configuration for interactive use. Additional parameters such as friction will be added here.
 terrain_action:
   terrain_types: ["bump"]
 
-  # bump 圆心前向距离范围（米）
+  # bump center forward distance range (m)
   min_forward_dist: 0.1
   max_forward_dist: 0.8
 
-  # bump 横向偏移范围（米）
+  # bump lateral offset range (m)
   max_lateral: 0.30
 
-  # bump 半径范围（米）
+  # bump radius range (m)
   radius_min: 0.1
   radius_max: 0.5
 
-  # bump 最大高度（米）
+  # bump max height (m)
   max_bump_height: 0.10
 
-  # 机器人附近地形不修改半径（米）
+  # no-modification radius around robot (m)
   no_change_radius: 0.45
 
   terrain_decimation: 20
 
 
-# 初始化梅花桩参数，可用于xxx  # TODO
+# Initialize plum blossom pile params, can be used for xxx  # TODO
 plum_blossom:
   foot_clearance_m: 0.05
 
 
-# 可视化配置
+# Visualization config
 visualization:
   render: False
   lock_camera: True
@@ -37,9 +37,9 @@ logging:
   # If true, info includes per-substep Go2 rollout traces (large payload).
   enable_trace: True
 
-# 奖励和事件配置
+# Reward and event config
 event_and_reward:
-  # 失败事件开关（可选关闭）
+  # failure event switch (can be disabled)
   failure_flags:
     fallen: True
     collided: False
@@ -48,21 +48,21 @@ event_and_reward:
     stuck: True
 
   # reward
-  # ===== 摔倒 =====
+  # ===== Fallen =====
   fall_height_threshold: 0.15
   fall_angle_threshold: 1.3
   fall_reward: 5.0
 
-  # ===== 碰撞 =====
+  # ===== Collision =====
   collision_force_threshold: 80.0
   collision_reward: 0.0
   base_collision_reward: 6.0
   thigh_collision_reward: 2.0
 
-  # ===== 失稳 =====
+  # ===== Instability =====
   tilt_reward_scale: 0.0
 
-  # ===== 速度惩罚 =====
+  # ===== Speed Penalty =====
   target_speed: 1.0
   speed_reward_scale: 0
   stuck_speed_threshold: 0.05
@@ -73,7 +73,7 @@ event_and_reward:
   success_reward: 1.0
 
 
-# 终止条件
+# Termination conditions
 termination:
   terminate_on_fall: True
   terminate_on_base_collision: True
@@ -83,7 +83,7 @@ termination:
   terrain_edge_margin: 1.0
 
 
-# 训练观测值配置
+# Training observation config
 observation:
   include_last_action: False
   include_foot_contacts: False
